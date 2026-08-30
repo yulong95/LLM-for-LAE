@@ -31,23 +31,60 @@ args = parser.parse_args()
 
 # ===================== Model loading =====================#
 def find_latest_run(gamma=0.8):
-    runs = sorted(glob.glob(os.path.join(base_output, "CNN_*")))
-    valid = [r for r in runs if glob.glob(os.path.join(r, '*.pth'))]
-    return valid[-1] if valid else runs[-1] if runs else None
+    """Find latest CNN run matching the requested gamma.
+    gamma=0.8 (default): search CNN_* but exclude CNN_gamma* directories.
+    gamma!=0.8: search CNN_gamma{gamma}_* directories only.
+    Raises FileNotFoundError if no matching checkpoint is found.
+    """
+    if gamma == 0.8:
+        runs = sorted(glob.glob(os.path.join(base_output, "CNN_*")))
+        valid = [r for r in runs
+                 if glob.glob(os.path.join(r, '*.pth'))
+                 and 'gamma' not in os.path.basename(r)]
+    else:
+        runs = sorted(glob.glob(os.path.join(base_output, f"CNN_gamma{gamma:.1f}_*")))
+        valid = [r for r in runs if glob.glob(os.path.join(r, '*.pth'))]
+    if not valid:
+        raise FileNotFoundError(
+            f"未找到 gamma={gamma} 的 CNN checkpoint。"
+            f"请先训练: python CNN.py --gamma {gamma}"
+        )
+    return valid[-1]
 
 
 def build_model(run_dir=None, gamma=0.8):
     if run_dir is None:
         run_dir = find_latest_run(gamma)
+    # Verify run directory name matches requested gamma
+    run_name = os.path.basename(run_dir)
+    if gamma == 0.8:
+        if 'gamma' in run_name:
+            raise ValueError(
+                f"gamma=0.8 但找到 gamma-specific 目录: {run_name}，"
+                f"请检查 find_latest_run 逻辑"
+            )
+    else:
+        expected_tag = f"gamma{gamma:.1f}"
+        if expected_tag not in run_name:
+            raise ValueError(
+                f"gamma={gamma} 但目录名不含 '{expected_tag}': {run_name}，"
+                f"请检查 find_latest_run 逻辑"
+            )
     model = CNN_pre(N, K, gamma=gamma)
     model.to(device)
     ckpts = sorted(glob.glob(os.path.join(run_dir, '*.pth')), key=os.path.getmtime)
+    if not ckpts:
+        raise FileNotFoundError(f"目录 {run_dir} 中没有 .pth checkpoint")
+    loaded = False
     for ck in reversed(ckpts):
         try:
             model.load_state_dict(torch.load(ck, map_location=device, weights_only=True))
+            loaded = True
             break
         except:
             pass
+    if not loaded:
+        raise RuntimeError(f"无法加载 {run_dir} 中的任何 checkpoint")
     model.eval()
     return model, run_dir
 
