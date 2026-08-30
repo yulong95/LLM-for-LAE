@@ -25,22 +25,31 @@ base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\o
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--quick', action='store_true', help='Skip timing measurement')
+parser.add_argument('--gamma', type=float, default=0.4,
+                    help='alpha_c constraint (must match training gamma). Paper Fig.6/8/9: 0.4')
 args = parser.parse_args()
 
 
 # ===================== Model loading =====================#
-def find_latest_run():
-    runs = sorted(glob.glob(os.path.join(base_output, "GPT2_*")))
-    # Exclude gamma/gamma2 sweep directories, keep only base models
-    valid = [r for r in runs if glob.glob(os.path.join(r, '*.bin'))
-             and 'gamma' not in os.path.basename(r)]
+def find_latest_run(gamma=0.4):
+    """Find latest GPT2 run directory matching the requested gamma.
+    For gamma=0.99 (unconstrained), look for base GPT2_* runs.
+    For other gamma values, look for GPT2_gamma{gamma}_* runs.
+    """
+    if gamma == 0.99:
+        runs = sorted(glob.glob(os.path.join(base_output, "GPT2_*")))
+        valid = [r for r in runs if glob.glob(os.path.join(r, '*.bin'))
+                 and 'gamma' not in os.path.basename(r)]
+    else:
+        runs = sorted(glob.glob(os.path.join(base_output, f"GPT2_gamma{gamma:.1f}_*")))
+        valid = [r for r in runs if glob.glob(os.path.join(r, '*.bin'))]
     return valid[-1] if valid else runs[-1] if runs else None
 
 
-def build_model(run_dir=None):
+def build_model(run_dir=None, gamma=0.4):
     if run_dir is None:
-        run_dir = find_latest_run()
-    model = Gpt2Model(model_path=gpt2_model_path, Nt=N, K=K, gamma=0.99)
+        run_dir = find_latest_run(gamma)
+    model = Gpt2Model(model_path=gpt2_model_path, Nt=N, K=K, gamma=gamma)
     model.to(device)
     ckpts = sorted(glob.glob(os.path.join(run_dir, '*.bin')), key=os.path.getmtime)
     for ck in reversed(ckpts):
@@ -59,15 +68,37 @@ def load_test_set():
 
 
 # ===================== Eval helpers =====================#
-def compute_alpha_N(p_hat, cl):
-    """Compute actual near-field power ratio: alpha_N = P_near / P_total."""
-    cl_expanded = cl.squeeze(-1)  # [B, K]
-    p_near = torch.sum(p_hat ** 2 * cl_expanded, dim=1)  # [B]
-    p_total = torch.sum(p_hat ** 2, dim=1)  # [B]
-    return (p_near / (p_total + 1e-8)).mean().item()
+def compute_alpha_N(V, cl, sigma2):
+    """
+    Compute actual near-field power ratio from the final precoding matrix V.
+    alpha_N = sum(||V_k||² for near-field users) / sum(||V_k||² for all users)
+
+    This uses the final V (after MMSE beamforming + global power scaling),
+    which is the true transmit power for each user.
+
+    Note: p_hat² is NOT strictly equal to ||V_k||² because:
+      1. The MMSE beamformer W_k depends on all users' power allocations
+      2. Global power scaling factor sqrt(P_total/current_power) is applied
+    However, since the global scaling is identical for all users, the RATIO
+    p_near²/p_total² equals ||V_near||²/||V_total||². This function computes
+    from V directly for strict equivalence.
+    """
+    Nt = 256
+    V_complex = torch.view_as_complex(V.contiguous())  # [B, Nt, 1, K]
+    V_power = torch.abs(V_complex) ** 2  # [B, Nt, 1, K]
+    user_power = torch.sum(V_power, dim=(1, 2, 3))  # [B] — ||V_k||² per sample
+    # cl: [B, K, 1] → [B, K], 1=near-field, 0=far-field
+    cl_labels = cl.squeeze(-1)  # [B, K]
+    near_mask = cl_labels  # [B, K], 1 for near-field users
+    p_near = torch.sum(user_power.unsqueeze(-1) * near_mask, dim=1)  # [B]
+    p_total = user_power  # [B]
+    alpha_N = p_near / (p_total + 1e-8)  # [B]
+    return alpha_N.mean().item()
 
 
-def eval_k(model, loader, K_eval):
+def eval_k(model, loader, K_eval, sigma2=None):
+    if sigma2 is None:
+        sigma2 = 10 ** (-20 / 10)
     criterion_rate = RateCal().to(device)
     criterion_acc = ACCLoss().to(device)
     rates, accs, alpha_Ns = [], [], []
@@ -81,7 +112,8 @@ def eval_k(model, loader, K_eval):
             p_hat, lamda_hat, cl_hat = model(H, cl)
             r = criterion_rate(p_hat, lamda_hat, H).item()
             a = criterion_acc(cl, torch.unsqueeze(cl_hat, dim=2)).item()
-            alpha_N = compute_alpha_N(p_hat, cl)
+            V = pq2V(p_hat, lamda_hat, H, sigma2, N)
+            alpha_N = compute_alpha_N(V, cl, sigma2)
             rates.append(r)
             accs.append(a)
             alpha_Ns.append(alpha_N)
@@ -193,8 +225,8 @@ def main():
     results = {}
 
     print("Loading GPT2 model...")
-    model, run_dir = build_model()
-    print(f"  Run: {os.path.basename(run_dir)}")
+    model, run_dir = build_model(gamma=args.gamma)
+    print(f"  Run: {os.path.basename(run_dir)} (gamma={model.gamma})")
     test_loader = load_test_set()
     print(f"  Test set: {len(test_loader.dataset)} samples")
 

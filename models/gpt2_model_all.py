@@ -88,12 +88,14 @@ class Gpt2Model(nn.Module):
         p_hat = dec_out[:,:,0]
         p_sum = torch.norm(p_hat,p=2,dim=1, keepdim=True)**2
         p_normalized = p_hat/torch.sqrt(p_sum+ 1e-8)
-        # mask0: True when alpha_N (near-field power ratio) already < gamma (alpha_c)
-        # In that case, keep original normalized output; no enforcement needed
+        # mask0: True when alpha_N (near-field power ratio) < gamma (alpha_c)
+        #   → Constraint satisfied, keep original normalized output
+        # mask0: False when alpha_N >= gamma
+        #   → Project/scale to constraint boundary: set P_near = gamma * P_max
         temp_label_0 = torch.norm(p_normalized * cl,p=2,dim=1, keepdim=True)**2
         mask0 = temp_label_0 < self.gamma
 
-        # When mask0=False: enforce alpha_N = gamma by scaling near/far power separately
+        # When mask0=False (alpha_N >= gamma): project to boundary
         # P_near = gamma * P_max, P_far = (1-gamma) * P_max
         norm_label_1 = torch.norm(p_hat * cl,p=2,dim=1, keepdim=True)**2
         scale_1 = torch.sqrt(self.P_max * self.gamma /(norm_label_1 + 1e-8) )
@@ -109,6 +111,7 @@ class Gpt2Model(nn.Module):
         lamda_sum = torch.sum(lamda_hat, dim=1, keepdim=True)
         lamda_normalized = lamda_hat/ (lamda_sum+ 1e-8)
         # Same constraint as p_hat: alpha_N_lamda <= gamma
+        # mask1: True → keep original; False → project to boundary (alpha_N_lamda = gamma)
         temp_label_1 = torch.sum(lamda_normalized * cl,dim=1, keepdim=True)
         mask1 = temp_label_1 < self.gamma
 

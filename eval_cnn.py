@@ -24,21 +24,22 @@ base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\o
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--quick', action='store_true', help='Skip timing measurement')
+parser.add_argument('--gamma', type=float, default=0.8,
+                    help='alpha_c constraint (must match training gamma). CNN default: 0.8')
 args = parser.parse_args()
 
 
 # ===================== Model loading =====================#
-def find_latest_run():
+def find_latest_run(gamma=0.8):
     runs = sorted(glob.glob(os.path.join(base_output, "CNN_*")))
-    # Filter to directories that contain actual checkpoints
     valid = [r for r in runs if glob.glob(os.path.join(r, '*.pth'))]
     return valid[-1] if valid else runs[-1] if runs else None
 
 
-def build_model(run_dir=None):
+def build_model(run_dir=None, gamma=0.8):
     if run_dir is None:
-        run_dir = find_latest_run()
-    model = CNN_pre(N, K, gamma=0.8)
+        run_dir = find_latest_run(gamma)
+    model = CNN_pre(N, K, gamma=gamma)
     model.to(device)
     ckpts = sorted(glob.glob(os.path.join(run_dir, '*.pth')), key=os.path.getmtime)
     for ck in reversed(ckpts):
@@ -215,8 +216,8 @@ def main():
     results = {}
 
     print("Loading CNN model...")
-    model, run_dir = build_model()
-    print(f"  Run: {os.path.basename(run_dir)}")
+    model, run_dir = build_model(gamma=args.gamma)
+    print(f"  Run: {os.path.basename(run_dir)} (gamma={model.gamma})")
     test_loader = load_test_set()
     print(f"  Test set: {len(test_loader.dataset)} samples")
 

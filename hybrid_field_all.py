@@ -11,7 +11,7 @@ import torch.nn as nn
 import numpy as np
 from models.gpt2_model_all import Gpt2Model
 from data import ChannelDataset
-from utils import ACCLoss, RateCal, MULoss
+from utils import ACCLoss, RateCal, MULoss, pq2V
 from einops import rearrange
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -20,7 +20,7 @@ N, K = 256, 10
 
 # ============= Args =============#
 parser = argparse.ArgumentParser()
-parser.add_argument('--gamma', type=float, default=0.99, help='Maximum allowed near-field power ratio (alpha_c). Paper Fig.6/8/9 uses 0.4')
+parser.add_argument('--gamma', type=float, default=0.4, help='Maximum allowed near-field power ratio (alpha_c). Paper Fig.6/8/9 uses 0.4')
 parser.add_argument('--gamma2', type=float, default=5.0, help='Classification loss weight')
 parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--lr', type=float, default=0.0001)
@@ -32,8 +32,8 @@ gpt2_model_path = r"C:\Users\17859\.cache\huggingface\hub\models--openai-communi
 data_root = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\Data_user.mat"
 base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output"
 
-# Output dir naming
-if args.gamma != 0.99:
+# Output dir naming (paper default: gamma=0.4, gamma2=5.0)
+if args.gamma != 0.4:
     dir_tag = f"GPT2_gamma{args.gamma:.1f}"
 elif args.gamma2 != 5.0:
     dir_tag = f"GPT2_gamma2_{args.gamma2}"
@@ -103,11 +103,15 @@ def train(training_loader, validate_loader, test_loader):
                 loss_cl = criterion_test_cl(cl, torch.unsqueeze(cl_hat, dim=2))
                 epoch_val_loss.append(loss_pre.item())
                 epoch_val_loss_cl.append(loss_cl.item())
-                # Compute actual alpha_N = P_near / P_total
-                cl_expanded = cl.squeeze(-1)  # [B, K]
-                p_near = torch.sum(p_hat ** 2 * cl_expanded, dim=1)  # [B]
-                p_total = torch.sum(p_hat ** 2, dim=1)  # [B]
-                alpha_N_actual = p_near / (p_total + 1e-8)  # [B]
+                # Compute actual alpha_N from final V: alpha_N = ||V_near||² / ||V_total||²
+                sigma2_val = 10 ** (-20 / 10)
+                V = pq2V(p_hat, lamda_hat, H, sigma2_val, N)
+                V_complex = torch.view_as_complex(V.contiguous())  # [B, Nt, 1, K]
+                V_power = torch.abs(V_complex) ** 2
+                user_power = torch.sum(V_power, dim=(1, 2, 3))  # [B]
+                cl_labels = cl.squeeze(-1)  # [B, K]
+                p_near = torch.sum(user_power.unsqueeze(-1) * cl_labels, dim=1)  # [B]
+                alpha_N_actual = p_near / (user_power + 1e-8)  # [B]
                 epoch_alpha_N.append(alpha_N_actual.mean().item())
 
         epoch_rate = np.nanmean(np.array(epoch_val_loss))
