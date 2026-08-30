@@ -1,125 +1,123 @@
 %% main_generate_data.m
-% Generate hybrid-field channel data for LLM-empowered near-field communications
-% Reference: "LLM-Empowered Near-Field Communications for Low-Altitude Economy"
+% 生成 hybrid-field channel data for LLM-empowered near-field communications
+% 按照论文原文 + 作者NFNOMA代码的信道模型重写
 %
-% Output: Data_user.mat containing:
-%   h_near_slant  - (total_samples, N) complex channel matrix (with path loss)
-%   index_far_near - (total_samples, 1) far/near field classification (0/1)
-%   where total_samples = num_users * K
+% 论文: "LLM-Empowered Near-Field Communications for Low-Altitude Economy"
+%
+% 输出: Data_user.mat
+%   h_near_slant    - (total_samples, N) 复数信道矩阵 (未归一化，含路径损耗)
+%   index_far_near   - (total_samples, 1) 远/近场分类 (0/1, 基于ENFR准则)
 
 clear; clc; close all;
 
-%% System Parameters (Table I from paper)
-fc = 30e9;                  % Carrier frequency: 30 GHz
-c = 3e8;                    % Speed of light
-lambda = c / fc;            % Wavelength
-d = lambda / 2;             % Antenna spacing (half-wavelength) = 0.5 cm
-N = 256;                    % Number of ULA antennas
-K = 10;                     % Number of single-antenna users per sample
-num_users = 10000;          % Generate 100000 samples (80000 train + 10000 val + 10000 test after split)
+%% 系统参数 (论文表I + 第五节-A)
+N = 256;                    % ULA天线数
+K = 10;                     % 每样本用户数
+Ns = 10000;                 % 总样本数 (8000训练 + 1000验证 + 1000测试)
 
-% Noise power: sigma^2 = -20 dBW (paper Section V-A and Fig.6-9)
-sigma2_dBW = -20;           % dBW
-sigma2 = 10^(sigma2_dBW/10); % = 0.01 W
+fc = 30e9;                  % 载频 30 GHz
+c = 3e8;                    % 光速
+lambda = c / fc;            % 波长 0.01 m
+d = lambda / 2;             % 天线间距 0.5 cm
 
-% Transmit power: P = 0 dBW (paper Fig.6-9)
-Pt_dBW = 0;                 % dBW
-Pt = 10^(Pt_dBW/10);        % = 1 W
+hB = 15;                    % 基站天线高度 (m), 论文第二节
+theta_tilt = 5 * pi / 180;  % 下倾角 (rad), 论文第二节
 
-% Distance parameters
-Deltath = 75;               % RSS threshold distance (m) - near/far field boundary
-Rmin = 8.7;                 % Minimum user distance (m) - from Table I
-Rmax = 200;                 % Maximum distance (m)
-% Note: Rayleigh distance = 2*(N*d)^2/lambda ≈ 1404 m for N=256, d=lambda/2
-% All users within 200 m are physically in the near-field (spherical wavefront).
-% The hybrid-field model uses Deltath=75m to classify UAV users as near/far for
-% the LLM-based precoding task, with different channel characteristics.
+% 用户坐标范围 (论文第五节-A)
+x_min = 0;  x_max = 200;    % 水平距离 (m)
+h_min = 0;  h_max = 30;     % 高度 (m)
 
-% Angular range for LAE scenario (elevation angles)
-theta_min = 30 * pi / 180;  % 30 degrees
-theta_max = 90 * pi / 180;  % 90 degrees (directly above)
+% ENFR阈值 (论文图4, Delta=0.1)
+Delta = 0.1;
 
-fprintf('System Parameters:\n');
-fprintf('  Lambda = %.4f m\n', lambda);
-fprintf('  Array aperture = %.2f m (N*d)\n', N*d);
-fprintf('  Near-field threshold (Deltath) = %.2f m\n', Deltath);
-fprintf('  User distance range: %.1f m - %.1f m\n', Rmin, Rmax);
-fprintf('  Generating %d samples with K=%d users each...\n', num_users, K);
+% 信道多径参数 (从作者NFNOMA代码推断, 论文未明确给出)
+L = 5;                      % NLoS路径数
+kappa = 8;                  % Rician因子
+sigma_aod = 5 * pi / 180;   % AOD扩展 (rad)
 
-%% Generate channel data
-total_samples = num_users * K;
-h_near_slant = zeros(total_samples, N);      % Normalized channel vectors (for LLM)
-h_near_slant_raw = zeros(total_samples, N);  % Unnormalized channel vectors (for baselines)
-index_far_near = zeros(total_samples, 1);     % Far/near classification (scalar per user)
+fprintf('系统参数:\n');
+fprintf('  N=%d, K=%d, Ns=%d\n', N, K, Ns);
+fprintf('  fc=%.0f GHz, lambda=%.4f m, d=%.4f m\n', fc/1e9, lambda, d);
+fprintf('  hB=%d m, tilt=%.1f deg\n', hB, theta_tilt*180/pi);
+fprintf('  L=%d, kappa=%d, sigma_aod=%.1f deg\n', L, kappa, sigma_aod*180/pi);
 
-% ULA element positions (centered)
-elem_pos = (-(N-1)/2 : (N-1)/2) * d;  % 1 x N
+%% 预分配
+total = Ns * K;
+h_near_slant = complex(zeros(total, N));
+index_far_near = zeros(total, 1);
 
-for idx = 1:num_users
-    if mod(idx, 200) == 0
-        fprintf('  Processing sample %d / %d ...\n', idx, num_users);
+nn = -(N-1)/2 : (N-1)/2;    % 天线索引
+
+%% 主循环
+fprintf('\n开始生成 %d 样本 x %d 用户 = %d 信道...\n', Ns, K, total);
+
+row = 1;
+for n_sample = 1:Ns
+    if mod(n_sample, 500) == 0
+        fprintf('  %d / %d\n', n_sample, Ns);
     end
 
     for k = 1:K
-        row = (idx - 1) * K + k;
+        %% 1. 随机用户坐标 (论文第二节, 第五节-A)
+        x_k = x_min + (x_max - x_min) * rand;
+        h_k = h_min + (h_max - h_min) * rand;
 
-        % Random user parameters
-        theta_k = theta_min + (theta_max - theta_min) * rand;  % angle
-        % Distance: 50% near-field, 50% far-field
-        if rand < 0.5
-            % Near-field user: distance in [Rmin, Deltath]
-            r_k = Rmin + (Deltath - Rmin) * rand;
-        else
-            % Far-field user: distance in [Deltath, Rmax]
-            r_k = Deltath + (Rmax - Deltath) * rand;
+        % 斜距 (BS天线中心到用户)
+        dz = h_k - hB;
+        r0 = sqrt(x_k^2 + dz^2);
+
+        % 垂直角 (相对于水平面)
+        theta_user = atan2(dz, x_k);
+
+        % 相对于下倾角的角度
+        theta = theta_user - theta_tilt;
+
+        %% 2. ENFR分类 (论文公式7-9)
+        % 计算远场波束成形增益损失
+        r_elem = sqrt(r0^2 - 2*r0*nn*d*sin(theta) + (nn*d).^2);
+        b_nf = exp(-1j*2*pi/lambda*(r_elem - r0)) / sqrt(N);  % 近场导向矢量
+        b_ff = exp(1j*2*pi/lambda*(nn*d*sin(theta))) / sqrt(N);  % 远场导向矢量
+
+        bf_gain = abs(b_nf * b_ff.');  % |b^H a|
+        bf_loss = 1 - bf_gain;
+
+        % 近场: 波束成形增益损失 >= Delta
+        index_far_near(row) = double(bf_loss >= Delta);
+
+        %% 3. 信道生成 (作者generate_user_in_circle_multipath.m, 无路径损耗)
+        % LoS路径: sqrt(kappa/(kappa+1)) * b(theta, r)
+        h_user = sqrt(kappa / (kappa + 1)) * b_nf;
+
+        % NLoS路径: sqrt(1/(kappa+1)) * alpha_l * b(theta_l, r_l) / sqrt(L)
+        % 作者代码: alpha = 1, NLoS gain = ssf * sqrt(1/L) * sqrt(1/(1+kappa))
+        theta_nlos = theta + sigma_aod * randn(1, L);
+        r_nlos = r0 .* (1 + 0.02 * randn(1, L));
+        r_nlos = max(r_nlos, 0.1);
+
+        % 衰落系数 (作者: ssf = (randn+1j*randn)/sqrt(2) * sqrt(1/L))
+        alpha = (randn(1, L) + 1j * randn(1, L)) / sqrt(2) / sqrt(L);
+
+        for l = 1:L
+            r_l_elem = sqrt(r_nlos(l)^2 - 2*r_nlos(l)*nn*d*sin(theta_nlos(l)) + (nn*d).^2);
+            b_l = exp(-1j*2*pi/lambda*(r_l_elem - r_nlos(l))) / sqrt(N);
+            h_user = h_user + sqrt(1/(kappa+1)) * alpha(l) * b_l;
         end
 
-        % ---- Channel model per paper Eq.2-6 ----
-        % Distance from user to n-th element:
-        r_n = sqrt(r_k^2 + elem_pos.^2 - 2*r_k*elem_pos*sin(theta_k));
+        % 直接存储，不归一化 (论文信道模型不含路径损耗，也不做归一化)
+        h_near_slant(row, :) = h_user;
 
-        % Scalar Rayleigh fading (per user, NOT per element)
-        % Paper Eq.2-4: alpha_0 is a scalar complex gain per user
-        fading = (randn + 1j * randn) / sqrt(2);
-
-        if r_k <= Deltath
-            % Near-field: beamfocusing vector b(theta,r) per Eq.5
-            b_k = exp(-1j * 2 * pi * (r_n - r_k) / lambda);
-            h_k = b_k * fading;
-        else
-            % Far-field: steering vector a(theta) per Eq.3
-            n_idx = (-(N-1)/2 : (N-1)/2);
-            a_k = exp(-1j * 2 * pi * d * n_idx * sin(theta_k) / lambda);
-            h_k = a_k * fading;
-        end
-
-        % Store unnormalized channel (for baselines)
-        h_near_slant_raw(row, :) = h_k;
-
-        % Normalize each channel to unit power (for LLM input)
-        h_k = h_k / norm(h_k);
-
-        % ---- Classification label ----
-        % 0 = far-field, 1 = near-field (scalar per user)
-        if r_k <= Deltath
-            cl_k = 1;
-        else
-            cl_k = 0;
-        end
-
-        % Store
-        h_near_slant(row, :) = h_k;
-        index_far_near(row, :) = cl_k;
+        row = row + 1;
     end
 end
 
-%% Save
+%% 保存
 save_path = fullfile(fileparts(mfilename('fullpath')), 'Data_user.mat');
-save(save_path, 'h_near_slant', 'h_near_slant_raw', 'index_far_near');
-fprintf('Data saved to: %s\n', save_path);
-fprintf('  h_near_slant: [%d x %d] complex (normalized)\n', size(h_near_slant));
-fprintf('  h_near_slant_raw: [%d x %d] complex (unnormalized)\n', size(h_near_slant_raw));
-fprintf('  index_far_near: [%d x %d] (scalar per user)\n', size(index_far_near));
-fprintf('  Near-field samples: %d (%.1f%%)\n', sum(index_far_near(:,1)), ...
-    100*sum(index_far_near(:,1))/total_samples);
-fprintf('Done!\n');
+save(save_path, 'h_near_slant', 'index_far_near');
+
+fprintf('\n保存完成: %s\n', save_path);
+fprintf('  h_near_slant: [%d x %d] 复数 (未归一化)\n', size(h_near_slant));
+fprintf('  index_far_near: [%d x %d]\n', size(index_far_near));
+fprintf('  近场比例: %.1f%%\n', 100*mean(index_far_near));
+fprintf('  远场比例: %.1f%%\n', 100*(1-mean(index_far_near)));
+fprintf('  信道范数: min=%.4f, max=%.4f, mean=%.4f\n', ...
+    min(abs(h_near_slant(:))), max(abs(h_near_slant(:))), mean(abs(h_near_slant(:))));

@@ -1,0 +1,11 @@
+Please note that the MATLAB R2024a is used for this simulation code package,  and there may be some imcompatibility problems among different MATLAB versions. 
+
+How to use this simulation code package?
+The simulation results (Fig. 6 in the paper) can be obtained by running Rate_vs_overhead.m. 
+
+The simulation results (Fig. 7 in the paper) can be obtained by running Rate_vs_SNR.m. 
+
+The simulation results (Fig. 8 in the paper) can be obtained by running Rate_vs_distance.m. 
+
+Due to the large amount of data, it may cause the code to run for too long so we also provide the data that has been run.
+*********************************************************************************************************************************

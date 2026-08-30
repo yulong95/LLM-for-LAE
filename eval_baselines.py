@@ -27,13 +27,17 @@ args = parser.parse_args()
 
 
 def load_test_set(use_raw=False):
-    """Load test set. use_raw=True loads unnormalized channels for baselines."""
+    """Load test set. use_raw=True loads from h_near_slant directly (no dict key)."""
     if use_raw:
         import scipy.io as sio
         from einops import rearrange
         mat = sio.loadmat(data_root)
-        H = mat['h_near_slant_raw']  # [total, N] complex
-        cl = mat['index_far_near']    # [total, 1]
+        # 新数据只有h_near_slant（未归一化），旧数据有h_near_slant_raw
+        if 'h_near_slant_raw' in mat:
+            H = mat['h_near_slant_raw']
+        else:
+            H = mat['h_near_slant']
+        cl = mat['index_far_near']
         H = rearrange(H, '(n L) W-> n L W', L=10)
         cl = rearrange(cl, '(n L) W-> n L W', L=10)
         B, L, Nt = H.shape
@@ -55,9 +59,13 @@ def load_test_set(use_raw=False):
 # ===================== Codebook helpers =====================#
 
 def build_polar_codebook(n_theta=60, n_r=60):
-    """Near-field polar-domain codebook: b(theta, r) for theta in [30,90] deg, r in [8.7, 200] m."""
-    thetas = np.linspace(30, 90, n_theta) * np.pi / 180
-    rs = np.linspace(8.7, 200, n_r)
+    """Near-field polar-domain codebook matching paper's geometry.
+    hB=15m, tilt=5°, x∈[0,200], h∈[0,30]
+    θ = atan2(h-hB, x) - tilt → range ≈ [-95°, 85°]
+    r = sqrt(x² + (h-hB)²) → range ≈ [15m, 201m]
+    """
+    thetas = np.linspace(-95, 85, n_theta) * np.pi / 180
+    rs = np.linspace(15, 201, n_r)
     codebook = []
     for theta in thetas:
         for r in rs:
@@ -70,8 +78,8 @@ def build_polar_codebook(n_theta=60, n_r=60):
 
 
 def build_dft_codebook(n_dirs=128):
-    """Far-field DFT codebook: a(theta) for theta in [30,90] deg."""
-    thetas = np.linspace(30, 90, n_dirs) * np.pi / 180
+    """Far-field DFT codebook: a(theta) for theta in [-95°, 85°]."""
+    thetas = np.linspace(-95, 85, n_dirs) * np.pi / 180
     codebook = []
     for theta in thetas:
         n = np.arange(N)
@@ -249,12 +257,14 @@ def noma_rate(H_complex, sigma2, P_total):
 
 def _codebook_rate(H_complex, codebook, sigma2, P_total, K_eval):
     """
-    Codebook-based beamforming with per-user power normalization.
+    Codebook-based beamforming with ZF digital precoding (beam domain).
     Paper [14]: "near-field polar-domain analog codebook and zero-forcing (ZF)
     digital precoding scheme with equal power allocation."
 
-    Each user selects the nearest codeword from the codebook as its beamforming
-    vector. Per-user power normalization ensures equal power allocation.
+    1. Each user selects nearest codeword.
+    2. Effective channel: H_eff[k,j] = h_k^H @ f_j (K×K matrix).
+    3. ZF in beam domain: W_beam = H_eff^H (H_eff H_eff^H)^{-1}
+    4. Final beamforming: v_k = F_sel^H @ w_k
     """
     batch, K, N_ch = H_complex.shape
     H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
@@ -266,28 +276,41 @@ def _codebook_rate(H_complex, codebook, sigma2, P_total, K_eval):
 
     for b in range(batch):
         H_b = H_np[b]  # [K, N]
-        f_all = codebook[best_idx[b]]  # [K, N] analog beam vectors (rows)
+        f_sel = codebook[best_idx[b]]  # [K, N] selected codewords
+        F_sel_H = f_sel.T.conj()  # [N, K]
 
-        # Per-user power normalization: v_k = f_k * sqrt(P_k) / ||f_k||
+        # Effective K×K channel: H_eff[k,j] = h_k^H @ f_j
+        H_eff = np.matmul(H_b, f_sel.T.conj())  # [K, K]
+
+        # ZF precoder in beam domain
+        reg = 1e-6 * np.trace(np.abs(H_eff @ H_eff.T.conj())) / K_eval
+        G = H_eff @ H_eff.T.conj() + reg * np.eye(K_eval, dtype=np.complex128)
+        try:
+            G_inv = np.linalg.inv(G)
+        except np.linalg.LinAlgError:
+            G_inv = np.linalg.pinv(G)
+        W_beam = H_eff.T.conj() @ G_inv  # [K, K]
+
+        # Map to antenna domain and compute SINR
         for k in range(K_eval):
-            fk = f_all[k]
-            fk_norm = np.linalg.norm(fk)
-            if fk_norm > 1e-10:
-                fk = fk / fk_norm * np.sqrt(P_k)
+            v_k = F_sel_H @ W_beam[:, k]  # [N]
+            v_k_norm = np.linalg.norm(v_k)
+            if v_k_norm > 1e-10:
+                v_k = v_k / v_k_norm * np.sqrt(P_k)
             else:
-                fk = fk * np.sqrt(P_k)
+                v_k = v_k * np.sqrt(P_k)
 
-            signal = np.abs(np.vdot(H_b[k], fk)) ** 2
+            signal = np.abs(np.vdot(H_b[k], v_k)) ** 2
             interf = 0
             for j in range(K_eval):
                 if j != k:
-                    fj = f_all[j]
-                    fj_norm = np.linalg.norm(fj)
-                    if fj_norm > 1e-10:
-                        fj = fj / fj_norm * np.sqrt(P_k)
+                    v_j = F_sel_H @ W_beam[:, j]
+                    v_j_norm = np.linalg.norm(v_j)
+                    if v_j_norm > 1e-10:
+                        v_j = v_j / v_j_norm * np.sqrt(P_k)
                     else:
-                        fj = fj * np.sqrt(P_k)
-                    interf += np.abs(np.vdot(H_b[k], fj)) ** 2
+                        v_j = v_j * np.sqrt(P_k)
+                    interf += np.abs(np.vdot(H_b[k], v_j)) ** 2
 
             sinr_k = signal / (interf + sigma2)
             single_rates[b, k] = np.log2(1 + sinr_k)
@@ -356,8 +379,13 @@ def eval_baseline_with_penalty(loader, rate_fn, K_eval=None, sigma2=None, P_tota
 
 def main():
     results = {}
-    test_loader = load_test_set(use_raw=False)
-    print(f"Test set: {len(test_loader.dataset)} samples")
+    # 新数据已不含归一化，直接加载即可
+    try:
+        test_loader = load_test_set(use_raw=True)
+        print(f"Test set: {len(test_loader.dataset)} samples (raw channels)")
+    except KeyError:
+        test_loader = load_test_set(use_raw=False)
+        print(f"Test set: {len(test_loader.dataset)} samples (normalized channels)")
 
     baselines = {
         'Capacity': dpc_rate,
