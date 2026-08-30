@@ -146,12 +146,15 @@ def eval_snr(model, loader, snr_db):
             H = data['H'].to(device, non_blocking=True)
             cl = data['cl'].to(device, non_blocking=True)
             H = rearrange(H, 'n W H a -> n W (H a)')
-            # Bypass internal noise, add external noise
+            # Bypass internal noise, add proper complex AWGN
             original_noise = model.noise
             model.noise = lambda h, s: h
-            sigma_ext = 10 ** (-snr_db / 10)
-            noise = torch.sqrt(torch.tensor(sigma_ext / 2.0)) * torch.randn_like(H)
-            noise = noise * torch.sqrt(torch.mean(torch.abs(H) ** 2))
+            H_4d = H.reshape(*H.shape[:-1], H.shape[-1] // 2, 2)
+            H_complex = torch.complex(H_4d[..., 0], H_4d[..., 1])
+            P_signal = torch.mean(torch.abs(H_complex) ** 2).item()
+            noise_power = P_signal / (10 ** (snr_db / 10))
+            n_complex = (torch.randn_like(H_complex) + 1j * torch.randn_like(H_complex)) * (noise_power / 2.0) ** 0.5
+            noise = torch.stack([n_complex.real, n_complex.imag], dim=-1).reshape_as(H)
             H = H + noise
             p_hat, lamda_hat, cl_hat = model(H, cl)
             model.noise = original_noise
