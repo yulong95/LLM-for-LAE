@@ -1,0 +1,19 @@
+# Data files (too large for git)
+Data_user.mat
+
+# Training output (checkpoints, logs, 2GB+)
+output/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Claude Code
+.claude/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Office temp files
+~$*
