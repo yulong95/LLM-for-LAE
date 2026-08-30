@@ -33,17 +33,28 @@ args = parser.parse_args()
 # ===================== Model loading =====================#
 def find_latest_run(gamma=0.4):
     """Find latest GPT2 run directory matching the requested gamma.
-    For gamma=0.99 (unconstrained), look for base GPT2_* runs.
-    For other gamma values, look for GPT2_gamma{gamma}_* runs.
+
+    Training output naming (hybrid_field_all.py):
+      gamma=0.4 (default) → GPT2_YYYY*     (no gamma suffix)
+      gamma!=0.4           → GPT2_gammaX_YYYY*
+
+    Search rules:
+      gamma=0.4 → GPT2_* excluding directories with 'gamma' in name
+      gamma!=0.4 → GPT2_gamma{gamma}_*
     """
-    if gamma == 0.99:
+    if gamma == 0.4:
         runs = sorted(glob.glob(os.path.join(base_output, "GPT2_*")))
         valid = [r for r in runs if glob.glob(os.path.join(r, '*.bin'))
                  and 'gamma' not in os.path.basename(r)]
     else:
         runs = sorted(glob.glob(os.path.join(base_output, f"GPT2_gamma{gamma:.1f}_*")))
         valid = [r for r in runs if glob.glob(os.path.join(r, '*.bin'))]
-    return valid[-1] if valid else runs[-1] if runs else None
+    if not valid:
+        raise FileNotFoundError(
+            f"未找到 gamma={gamma} 的 GPT2 checkpoint。"
+            f"请先训练: python hybrid_field_all.py --gamma {gamma}"
+        )
+    return valid[-1]
 
 
 def build_model(run_dir=None, gamma=0.4):
@@ -52,12 +63,18 @@ def build_model(run_dir=None, gamma=0.4):
     model = Gpt2Model(model_path=gpt2_model_path, Nt=N, K=K, gamma=gamma)
     model.to(device)
     ckpts = sorted(glob.glob(os.path.join(run_dir, '*.bin')), key=os.path.getmtime)
+    if not ckpts:
+        raise FileNotFoundError(f"目录 {run_dir} 中没有 .bin checkpoint")
+    loaded = False
     for ck in reversed(ckpts):
         try:
             model.load_state_dict(torch.load(ck, map_location=device, weights_only=True))
+            loaded = True
             break
         except:
             pass
+    if not loaded:
+        raise RuntimeError(f"无法加载 {run_dir} 中的任何 checkpoint")
     model.eval()
     return model, run_dir
 
