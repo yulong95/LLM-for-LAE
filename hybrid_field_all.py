@@ -48,16 +48,12 @@ model.to(device)
 
 # ============= Train function =============#
 def train(training_loader, validate_loader, test_loader):
-    best_loss = 0
+    best_rate = -float("inf")
+    best_epoch = 0
+    best_checkpoint = os.path.join(output_dir, 'best.bin')
     log_path = os.path.join(output_dir, 'train_log.csv')
     with open(log_path, 'w') as f:
-        f.write('epoch,train_loss,val_loss,val_acc,time_sec,saved\n')
-
-    def cleanup_checkpoints(keep_best=2):
-        ckpts = sorted(glob.glob(os.path.join(output_dir, '*.bin')), key=lambda x: int(os.path.basename(x).split('.')[0]))
-        if len(ckpts) > keep_best:
-            for f in ckpts[:-keep_best]:
-                os.remove(f)
+        f.write('epoch,train_loss,val_rate,val_acc,time_sec,saved\n')
 
     print(f"Training GPT2: gamma={args.gamma}, gamma2={args.gamma2}, {args.epochs} epochs")
     print(f"Output: {output_dir}")
@@ -117,42 +113,26 @@ def train(training_loader, validate_loader, test_loader):
         epoch_rate = np.nanmean(np.array(epoch_val_loss))
         epoch_acc = np.nanmean(np.array(epoch_val_loss_cl))
         epoch_alpha_N_mean = np.nanmean(np.array(epoch_alpha_N))
-        epoch_loss_val = epoch_rate + epoch_acc
-
-        # MULoss for CSV (same as training, for Fig.5)
-        epoch_mu_loss = []
-        with torch.no_grad():
-            for data in validate_loader:
-                H = data['H'].to(device, non_blocking=True)
-                H = rearrange(H, 'n W H a -> n W (H a)')
-                cl = data['cl'].to(device, non_blocking=True)
-                p_hat, lamda_hat, cl_hat = model(H, cl)
-                mu_loss = criterion_train(p_hat, lamda_hat, H)
-                epoch_mu_loss.append(mu_loss.item())
-        val_mu_loss = np.nanmean(np.array(epoch_mu_loss))
 
         saved = False
-        if epoch_loss_val > best_loss:
-            best_loss = epoch_loss_val
-            torch.save(model.state_dict(), os.path.join(output_dir, '%d.bin' % (epoch + 1)))
-            cleanup_checkpoints(keep_best=2)
+        if epoch_rate > best_rate:
+            best_rate = epoch_rate
+            best_epoch = epoch + 1
+            torch.save(model.state_dict(), best_checkpoint)
             saved = True
 
         with open(log_path, 'a') as f:
-            f.write(f'{epoch+1},{train_loss_val:.7f},{val_mu_loss:.7f},{epoch_acc:.7f},{time_elapsed:.1f},{saved}\n')
+            f.write(f'{epoch+1},{train_loss_val:.7f},{epoch_rate:.7f},{epoch_acc:.7f},{time_elapsed:.1f},{saved}\n')
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
             print(f"  Epoch {epoch+1}/{args.epochs}: rate={epoch_rate:.4f} acc={epoch_acc:.4f} alpha_N={epoch_alpha_N_mean:.4f} (gamma={args.gamma}) time={time_elapsed:.1f}s {'SAVED' if saved else ''}")
 
     # Final test
+    print(f"\nBest epoch: {best_epoch}")
+    print(f"Best validation rate: {best_rate:.4f}")
+    print(f"Best checkpoint: {best_checkpoint}")
     print("\nFinal test evaluation...")
-    ckpts = sorted([f for f in os.listdir(output_dir) if f.endswith('.bin')], key=lambda x: int(x.split('.')[0]))
-    for ck in reversed(ckpts):
-        try:
-            model.load_state_dict(torch.load(os.path.join(output_dir, ck), map_location=device, weights_only=True))
-            break
-        except:
-            pass
+    model.load_state_dict(torch.load(best_checkpoint, map_location=device, weights_only=True))
     model.eval()
 
     criterion_rate = RateCal().to(device)
