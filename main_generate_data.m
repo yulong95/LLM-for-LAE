@@ -16,7 +16,7 @@ lambda = c / fc;            % Wavelength
 d = lambda / 2;             % Antenna spacing (half-wavelength) = 0.5 cm
 N = 256;                    % Number of ULA antennas
 K = 10;                     % Number of single-antenna users per sample
-num_users = 1000;           % Generate 10000 samples (8000 train + 1000 val + 1000 test after split)
+num_users = 10000;          % Generate 100000 samples (80000 train + 10000 val + 10000 test after split)
 
 % Noise power: sigma^2 = -20 dBW (paper Section V-A and Fig.6-9)
 sigma2_dBW = -20;           % dBW
@@ -48,7 +48,8 @@ fprintf('  Generating %d samples with K=%d users each...\n', num_users, K);
 
 %% Generate channel data
 total_samples = num_users * K;
-h_near_slant = zeros(total_samples, N);      % Channel vectors (complex)
+h_near_slant = zeros(total_samples, N);      % Normalized channel vectors (for LLM)
+h_near_slant_raw = zeros(total_samples, N);  % Unnormalized channel vectors (for baselines)
 index_far_near = zeros(total_samples, 1);     % Far/near classification (scalar per user)
 
 % ULA element positions (centered)
@@ -92,7 +93,10 @@ for idx = 1:num_users
             h_k = a_k * fading;
         end
 
-        % Normalize each channel to unit power
+        % Store unnormalized channel (for baselines)
+        h_near_slant_raw(row, :) = h_k;
+
+        % Normalize each channel to unit power (for LLM input)
         h_k = h_k / norm(h_k);
 
         % ---- Classification label ----
@@ -111,9 +115,10 @@ end
 
 %% Save
 save_path = fullfile(fileparts(mfilename('fullpath')), 'Data_user.mat');
-save(save_path, 'h_near_slant', 'index_far_near');
+save(save_path, 'h_near_slant', 'h_near_slant_raw', 'index_far_near');
 fprintf('Data saved to: %s\n', save_path);
-fprintf('  h_near_slant: [%d x %d] complex\n', size(h_near_slant));
+fprintf('  h_near_slant: [%d x %d] complex (normalized)\n', size(h_near_slant));
+fprintf('  h_near_slant_raw: [%d x %d] complex (unnormalized)\n', size(h_near_slant_raw));
 fprintf('  index_far_near: [%d x %d] (scalar per user)\n', size(index_far_near));
 fprintf('  Near-field samples: %d (%.1f%%)\n', sum(index_far_near(:,1)), ...
     100*sum(index_far_near(:,1))/total_samples);

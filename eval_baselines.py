@@ -26,9 +26,30 @@ parser.add_argument('--quick', action='store_true', help='Skip Rmin/alpha sweeps
 args = parser.parse_args()
 
 
-def load_test_set():
-    test_set = ChannelDataset(data_root, is_train=2, train_per=0.8, valid_per=0.1)
-    return torch.utils.data.DataLoader(dataset=test_set, batch_size=batch_size, shuffle=False)
+def load_test_set(use_raw=False):
+    """Load test set. use_raw=True loads unnormalized channels for baselines."""
+    if use_raw:
+        import scipy.io as sio
+        from einops import rearrange
+        mat = sio.loadmat(data_root)
+        H = mat['h_near_slant_raw']  # [total, N] complex
+        cl = mat['index_far_near']    # [total, 1]
+        H = rearrange(H, '(n L) W-> n L W', L=10)
+        cl = rearrange(cl, '(n L) W-> n L W', L=10)
+        B, L, Nt = H.shape
+        train_per, valid_per = 0.8, 0.1
+        H = H[int((train_per + valid_per) * B):, :, :]
+        cl = cl[int((train_per + valid_per) * B):, :, :]
+        H_real = np.zeros([H.shape[0], L, Nt, 2])
+        H_real[:, :, :, 0] = H.real
+        H_real[:, :, :, 1] = H.imag
+        H_real = torch.tensor(H_real, dtype=torch.float32)
+        cl = torch.tensor(cl, dtype=torch.float32)
+        from torch.utils.data import TensorDataset
+        dataset = TensorDataset(H_real, cl)
+    else:
+        dataset = ChannelDataset(data_root, is_train=2, train_per=0.8, valid_per=0.1)
+    return torch.utils.data.DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False)
 
 
 # ===================== Codebook helpers =====================#
@@ -180,7 +201,8 @@ def dpc_rate(H_complex, sigma2, P_total):
 def noma_rate(H_complex, sigma2, P_total):
     """
     Near-field NOMA: MRT beamforming + SIC + dynamic power allocation.
-    H_complex: [batch, K, N] complex.
+    Paper [34]: near-field NOMA with dynamic power allocation algorithm.
+    MRT beamforming uses the full channel for maximum signal gain.
     """
     batch, K, _ = H_complex.shape
     H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
@@ -189,21 +211,27 @@ def noma_rate(H_complex, sigma2, P_total):
 
     for b in range(batch):
         H_b = H_np[b]  # [K, N]
+        # MRT beamforming: w_k = h_k / ||h_k||, signal gain = ||h_k||^2
         gains = np.array([np.linalg.norm(H_b[k]) ** 2 for k in range(K)])
-        order = np.argsort(gains)
+        # SIC decoding order: strongest channel first (descending)
+        order = np.argsort(gains)[::-1]
+
         # Dynamic power allocation: weaker users get more power
+        # Paper uses exponential allocation favoring weaker users
         raw_power = np.array([2.0 ** (K - i) for i in range(K)])
         raw_power = raw_power / raw_power.sum() * P_total
         P_k = np.zeros(K)
         for idx, k in enumerate(order):
             P_k[k] = raw_power[idx]
+
         # Compute SINR with SIC
         rate_sum = 0
-        for idx, k in enumerate(order):
-            hk = H_b[k] / np.linalg.norm(H_b[k])
+        for decode_idx, k in enumerate(order):
+            hk = H_b[k] / np.linalg.norm(H_b[k])  # MRT beamformer
             signal = P_k[k] * gains[k]
             interf = 0
-            for j_idx in range(idx + 1, K):
+            # SIC: decode stronger users first, subtract their interference
+            for j_idx in range(decode_idx + 1, K):
                 j = order[j_idx]
                 hj = H_b[j] / np.linalg.norm(H_b[j])
                 interf += P_k[j] * np.abs(np.vdot(hk, hj)) ** 2
@@ -221,7 +249,7 @@ def noma_rate(H_complex, sigma2, P_total):
 
 def _codebook_rate(H_complex, codebook, sigma2, P_total, K_eval):
     """
-    Codebook-based beamforming with per-user power allocation.
+    Codebook-based beamforming with per-user power normalization.
     Paper [14]: "near-field polar-domain analog codebook and zero-forcing (ZF)
     digital precoding scheme with equal power allocation."
 
@@ -283,6 +311,16 @@ def sdma_rate(H_complex, sigma2, P_total):
 
 # ===================== Unified eval function =====================#
 
+def _extract_H(data, K_eval):
+    """Extract H_complex from either dict or tuple format data."""
+    if isinstance(data, dict):
+        H = data['H'].to(device, non_blocking=True)
+    else:
+        H = data[0].to(device, non_blocking=True)
+    H_complex = torch.view_as_complex(H.reshape(H.shape[0], H.shape[1], 256, 2).contiguous())
+    return H_complex[:, :K_eval, :]
+
+
 def eval_baseline(loader, rate_fn, K_eval=None, sigma2=None, P_total=1.0):
     if sigma2 is None:
         sigma2 = 10 ** (-20 / 10)
@@ -291,9 +329,7 @@ def eval_baseline(loader, rate_fn, K_eval=None, sigma2=None, P_total=1.0):
     rates = []
     with torch.no_grad():
         for data in loader:
-            H = data['H'].to(device, non_blocking=True)
-            H_complex = torch.view_as_complex(H.reshape(H.shape[0], H.shape[1], 256, 2).contiguous())
-            H_complex = H_complex[:, :K_eval, :]
+            H_complex = _extract_H(data, K_eval)
             Rsum, _ = rate_fn(H_complex, sigma2, P_total)
             rates.append(torch.mean(Rsum).item())
     return np.mean(rates)
@@ -307,9 +343,7 @@ def eval_baseline_with_penalty(loader, rate_fn, K_eval=None, sigma2=None, P_tota
     rates = []
     with torch.no_grad():
         for data in loader:
-            H = data['H'].to(device, non_blocking=True)
-            H_complex = torch.view_as_complex(H.reshape(H.shape[0], H.shape[1], 256, 2).contiguous())
-            H_complex = H_complex[:, :K_eval, :]
+            H_complex = _extract_H(data, K_eval)
             Rsum, single_rate = rate_fn(H_complex, sigma2, P_total)
             penalty = F.relu(torch.tensor(rmin) - single_rate) * 10.0
             penalty = torch.sum(penalty, dim=1)
@@ -322,7 +356,7 @@ def eval_baseline_with_penalty(loader, rate_fn, K_eval=None, sigma2=None, P_tota
 
 def main():
     results = {}
-    test_loader = load_test_set()
+    test_loader = load_test_set(use_raw=False)
     print(f"Test set: {len(test_loader.dataset)} samples")
 
     baselines = {
