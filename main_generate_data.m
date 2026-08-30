@@ -73,12 +73,27 @@ for n_sample = 1:Ns
         theta = theta_user - theta_tilt;
 
         %% 2. ENFR分类 (论文公式7-9)
-        % 计算远场波束成形增益损失
-        r_elem = sqrt(r0^2 - 2*r0*nn*d*sin(theta) + (nn*d).^2);
-        b_nf = exp(-1j*2*pi/lambda*(r_elem - r0)) / sqrt(N);  % 近场导向矢量
-        b_ff = exp(1j*2*pi/lambda*(nn*d*sin(theta))) / sqrt(N);  % 远场导向矢量
+        % 近场导向矢量 b(theta, r): 论文公式(2)
+        %   b_n = (1/sqrt(N)) * exp(-j*2*pi*(r_n - r)/lambda)
+        %   r_n = sqrt(r^2 + x_n^2 - 2*r*x_n*sin(theta))
+        % 远场导向矢量 a(theta): 论文公式(3)的共轭形式
+        %   a_n = (1/sqrt(N)) * exp(+j*2*pi*d*n*sin(theta)/lambda)
+        %   注: 论文定义 a(theta) = (1/sqrt(N)) exp(-j*2*pi*d*n*sin(theta)/lambda)
+        %       但 |b^H a| = |b^H conj(a)|，正/负号不影响ENFR判定，
+        %       此处取共轭形式以便与 MATLAB 转置运算配合。
+        %
+        % ENFR准则 (论文公式7-9):
+        %   近场条件: 1 - |b^H * a| >= Delta
+        %   即 |b^H * a| <= 1 - Delta 时判为近场
 
-        bf_gain = abs(b_nf * b_ff.');  % |b^H a|
+        r_elem = sqrt(r0^2 - 2*r0*nn*d*sin(theta) + (nn*d).^2);
+        b_nf = exp(-1j*2*pi/lambda*(r_elem - r0)) / sqrt(N);  % 近场导向矢量 b(theta,r)
+        b_ff = exp(1j*2*pi/lambda*(nn*d*sin(theta))) / sqrt(N);  % 远场导向矢量 conj(a(theta))
+
+        % 计算 |b^H * a|: 使用 MATLAB 共轭转置 b_ff' 对 b_ff 取共轭
+        % [修正] 旧代码 b_nf * b_ff.' 使用了无共轭的转置 ('.'), 导致 |b^H a| ≈ 0
+        %        正确应使用共轭转置 b_ff' (单引号), 等价于 b_nf * conj(b_ff)
+        bf_gain = abs(b_nf * b_ff');  % |b^H a|
         bf_loss = 1 - bf_gain;
 
         % 近场: 波束成形增益损失 >= Delta

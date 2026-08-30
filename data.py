@@ -51,3 +51,58 @@ class ChannelDataset(Dataset):
             "H": self.H[index, :, :, :].float(),
             "cl": self.cl[index, :, :].float(),
         }
+
+
+if __name__ == "__main__":
+    """最小化数据加载测试"""
+    import sys
+    data_root = os.path.join(os.path.dirname(__file__), "Data_user.mat")
+
+    print("=" * 50)
+    print("数据接口验证测试")
+    print("=" * 50)
+
+    # 1. 检查文件是否存在
+    if not os.path.exists(data_root):
+        print(f"[错误] 找不到 {data_root}")
+        sys.exit(1)
+    print(f"[OK] 数据文件: {data_root}")
+
+    # 2. 检查原始数据维度
+    raw = sio.loadmat(data_root)
+    H_raw = raw['h_near_slant']
+    cl_raw = raw['index_far_near']
+    print(f"\n[原始数据]")
+    print(f"  h_near_slant shape: {H_raw.shape}, dtype: {H_raw.dtype}")
+    print(f"  index_far_near shape: {cl_raw.shape}, dtype: {cl_raw.dtype}")
+
+    # 3. 测试三个数据集
+    for split_name, is_train in [("训练集", 1), ("验证集", 0), ("测试集", 2)]:
+        dataset = ChannelDataset(data_root, is_train=is_train)
+        H, cl = dataset.H, dataset.cl
+
+        print(f"\n[{split_name}] (is_train={is_train})")
+        print(f"  数据集长度: {len(dataset)}")
+        print(f"  H shape: {H.shape}")
+        print(f"  cl shape: {cl.shape}")
+
+        # 检查 NaN/Inf
+        has_nan = torch.isnan(H).any().item()
+        has_inf = torch.isinf(H).any().item()
+        print(f"  H NaN: {has_nan}, Inf: {has_inf}")
+
+        # 检查 cl 分布
+        cl_flat = cl.view(-1).numpy()
+        n_zero = (cl_flat == 0).sum()
+        n_one = (cl_flat == 1).sum()
+        total = len(cl_flat)
+        print(f"  cl 分布: 0(远场)={n_zero} ({100*n_zero/total:.1f}%), 1(近场)={n_one} ({100*n_one/total:.1f}%)")
+
+        # 检查单个样本
+        sample = dataset[0]
+        print(f"  单样本 H shape: {sample['H'].shape}")
+        print(f"  单样本 cl shape: {sample['cl'].shape}")
+
+    print("\n" + "=" * 50)
+    print("测试完成")
+    print("=" * 50)
