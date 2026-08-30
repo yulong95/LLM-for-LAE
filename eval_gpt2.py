@@ -59,10 +59,18 @@ def load_test_set():
 
 
 # ===================== Eval helpers =====================#
+def compute_alpha_N(p_hat, cl):
+    """Compute actual near-field power ratio: alpha_N = P_near / P_total."""
+    cl_expanded = cl.squeeze(-1)  # [B, K]
+    p_near = torch.sum(p_hat ** 2 * cl_expanded, dim=1)  # [B]
+    p_total = torch.sum(p_hat ** 2, dim=1)  # [B]
+    return (p_near / (p_total + 1e-8)).mean().item()
+
+
 def eval_k(model, loader, K_eval):
     criterion_rate = RateCal().to(device)
     criterion_acc = ACCLoss().to(device)
-    rates, accs = [], []
+    rates, accs, alpha_Ns = [], [], []
     with torch.no_grad():
         for data in loader:
             H = data['H'].to(device, non_blocking=True)
@@ -73,9 +81,11 @@ def eval_k(model, loader, K_eval):
             p_hat, lamda_hat, cl_hat = model(H, cl)
             r = criterion_rate(p_hat, lamda_hat, H).item()
             a = criterion_acc(cl, torch.unsqueeze(cl_hat, dim=2)).item()
+            alpha_N = compute_alpha_N(p_hat, cl)
             rates.append(r)
             accs.append(a)
-    return np.mean(rates), np.mean(accs)
+            alpha_Ns.append(alpha_N)
+    return np.mean(rates), np.mean(accs), np.mean(alpha_Ns)
 
 
 def eval_snr(model, loader, snr_db):
@@ -103,7 +113,11 @@ def eval_snr(model, loader, snr_db):
     return np.mean(rates), np.mean(accs)
 
 
-def rate_with_sigma(model, loader, sigma2):
+def rate_at_power(model, loader, P_total, sigma2=0.01):
+    """
+    Compute rate at given transmit power P_total (Watts) with fixed noise sigma2.
+    Paper Fig.9: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed.
+    """
     rates = []
     with torch.no_grad():
         for data in loader:
@@ -111,7 +125,7 @@ def rate_with_sigma(model, loader, sigma2):
             cl = data['cl'].to(device, non_blocking=True)
             H = rearrange(H, 'n W H a -> n W (H a)')
             p_hat, lamda_hat, cl_hat = model(H, cl)
-            precoding_mat = pq2V(p_hat, lamda_hat, H, sigma2, N)
+            precoding_mat = pq2V(p_hat, lamda_hat, H, sigma2, N, P_total=P_total)
             Rsum, _ = SMR_loss(precoding_mat, H, sigma2)
             rates.append(torch.mean(Rsum).item())
     return np.mean(rates)
@@ -188,9 +202,9 @@ def main():
     print("\n===== K Sweep (5-10) =====")
     k_results = {}
     for k in range(5, 11):
-        r, a = eval_k(model, test_loader, k)
-        k_results[k] = {'gpt2_rate': r, 'gpt2_acc': a}
-        print(f"  K={k}: rate={r:.4f} acc={a:.4f}")
+        r, a, alpha_N = eval_k(model, test_loader, k)
+        k_results[k] = {'gpt2_rate': r, 'gpt2_acc': a, 'alpha_N': alpha_N}
+        print(f"  K={k}: rate={r:.4f} acc={a:.4f} alpha_N={alpha_N:.4f} (gamma={model.gamma})")
     results['k_sweep'] = k_results
 
     # ===== SNR sweep (Table I) =====
@@ -203,13 +217,15 @@ def main():
     results['snr_sweep'] = snr_results
 
     # ===== Rate vs P (Fig.9) =====
-    print("\n===== Rate vs P =====")
+    # Paper: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed
+    print("\n===== Rate vs P (Fig.9) =====")
     fig9 = {}
+    sigma2_fixed = 10**(-20/10)  # Fixed noise power: -20 dBW = 0.01 W
     for P_dBW in [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10]:
-        sigma2 = 0.01 * 10**(-P_dBW / 10)
-        r = rate_with_sigma(model, test_loader, sigma2)
+        P_total = 10**(P_dBW / 10)  # Convert dBW to Watts
+        r = rate_at_power(model, test_loader, P_total, sigma2=sigma2_fixed)
         fig9[str(P_dBW)] = r
-        print(f"  P={P_dBW:>3}dBW: rate={r:.4f}")
+        print(f"  P={P_dBW:>3}dBW ({P_total:.4f}W): rate={r:.4f}")
     results['fig9'] = fig9
 
     # ===== Rate vs alpha_N (Fig.7) =====
@@ -230,8 +246,9 @@ def main():
         print(f"  Rmin={rmin:.1f}: rate={r:.4f}")
     results['fig8'] = fig8
 
-    # ===== Gamma-trained models evaluation (Fig.7 separate) =====
-    print("\n===== Gamma-trained models (Fig.7) =====")
+    # ===== Alpha_c sweep: gamma-trained models (Fig.7) =====
+    # Each model trained with a different alpha_c (gamma) constraint
+    print("\n===== Alpha_c sweep: gamma-trained models (Fig.7) =====")
     gamma_results = {}
     for gamma in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
         pattern = os.path.join(base_output, f"GPT2_gamma{gamma:.1f}_*")
@@ -269,7 +286,7 @@ def main():
                 rates_g.append(r)
                 accs_g.append(a)
         gamma_results[str(gamma)] = {'rate': np.mean(rates_g), 'acc': np.mean(accs_g)}
-        print(f"  gamma={gamma:.1f}: rate={np.mean(rates_g):.4f} acc={np.mean(accs_g):.4f}")
+        print(f"  alpha_c={gamma:.1f}: rate={np.mean(rates_g):.4f} acc={np.mean(accs_g):.4f}")
         del model_g
         torch.cuda.empty_cache()
     results['gamma_sweep'] = gamma_results

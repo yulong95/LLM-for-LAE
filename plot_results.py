@@ -133,7 +133,9 @@ def plot_rate_vs_K():
     plt.close()
 
 
-# ==================== Figure 7: Rate vs alpha_N ====================
+# ==================== Figure 7: Rate vs alpha_c (near-field power constraint) ====================
+# Paper uses alpha_N as x-axis label, but the sweep varies alpha_c (constraint upper bound).
+# alpha_N_actual <= alpha_c always holds.
 def plot_rate_vs_alpha():
     gpt2_data = load_json('eval_gpt2_results.json')
     cnn_data = load_json('eval_cnn_results.json')
@@ -172,9 +174,9 @@ def plot_rate_vs_alpha():
         your_cnn_rates = [cnn_data['cnn_fig7'][str(a)] for a in alpha]
         ax.plot(alpha, your_cnn_rates, marker='d', color='cyan', linestyle='-', label='Your CNN', linewidth=1.5, markersize=10)
 
-    ax.set_xlabel(r'$\alpha_N$ (near-field user ratio)')
+    ax.set_xlabel(r'$\alpha_c$ (maximum near-field power ratio constraint)')
     ax.set_ylabel('Spectrum Efficiency (bps/Hz)')
-    ax.set_title('Spectrum Efficiency vs Near-Field User Ratio')
+    ax.set_title('Spectrum Efficiency vs Near-Field Power Constraint')
     ax.legend(fontsize=8)
     ax.set_xticks(alpha)
     plt.tight_layout()

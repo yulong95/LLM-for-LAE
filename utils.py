@@ -47,7 +47,18 @@ class MULoss(nn.Module):
         return loss
 
 
-def pq2V(p_hat,lamda_hat,muchannel,sigma,muh_dimen):
+def pq2V(p_hat,lamda_hat,muchannel,sigma,muh_dimen,P_total=1.0):
+    """
+    Convert p_hat, lambda_hat to precoding matrix V.
+
+    Args:
+        p_hat: [B, K] power allocation coefficients
+        lamda_hat: [B, K] beamforming weights
+        muchannel: [B, K, N*2] channel (real/imag concatenated)
+        sigma: noise power (sigma^2)
+        muh_dimen: antenna dimension (256)
+        P_total: total transmit power in Watts (default: 1.0 for training)
+    """
     Nt = muh_dimen
     Nr = 1
     K = p_hat.shape[1]
@@ -73,6 +84,15 @@ def pq2V(p_hat,lamda_hat,muchannel,sigma,muh_dimen):
         V.append(V_temp)
     V = torch.conj(torch.stack(V, dim=2).reshape((-1, Nt, 1,K,1)))
     V = torch.cat((V.real,V.imag),dim=-1)
+
+    # Scale V to achieve target total transmit power P_total
+    # Current total power = sum_k ||V_k||^2, target = P_total
+    V_complex = torch.view_as_complex(V.contiguous())
+    current_power = torch.sum(torch.abs(V_complex)**2, dim=(1,2,3))  # [B]
+    # Use real dtype for scale to avoid complex type propagation
+    scale = torch.sqrt(torch.tensor(P_total, dtype=torch.float32, device=V.device) / (current_power + 1e-24))
+    V = V * scale.reshape(-1, 1, 1, 1, 1)
+
     return V
 
 

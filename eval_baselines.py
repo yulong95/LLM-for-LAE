@@ -406,16 +406,17 @@ def main():
     results['k_sweep'] = k_results
 
     # ===== Rate vs P (Fig.9) =====
-    print("\n===== Rate vs P =====")
+    # Paper: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed
+    print("\n===== Rate vs P (Fig.9) =====")
     fig9 = {}
+    sigma2_fixed = 10**(-20/10)  # Fixed noise power: -20 dBW = 0.01 W
     for P_dBW in [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10]:
-        sigma2 = 0.01 * 10 ** (-P_dBW / 10)
-        P_total = 10 ** (P_dBW / 10)
+        P_total = 10 ** (P_dBW / 10)  # Convert dBW to Watts
         fig9[str(P_dBW)] = {}
         for name, fn in baselines.items():
-            r = eval_baseline(test_loader, fn, sigma2=sigma2, P_total=P_total)
+            r = eval_baseline(test_loader, fn, sigma2=sigma2_fixed, P_total=P_total)
             fig9[str(P_dBW)][name] = r
-            print(f"  P={P_dBW:>3}dBW {name}: {r:.4f}")
+            print(f"  P={P_dBW:>3}dBW ({P_total:.4f}W) {name}: {r:.4f}")
     results['fig9'] = fig9
 
     if not args.quick:

@@ -120,7 +120,11 @@ def eval_snr(model, loader, snr_db):
     return np.mean(rates), np.mean(accs)
 
 
-def rate_at_power(model, loader, sigma2):
+def rate_at_power(model, loader, P_total, sigma2=0.01):
+    """
+    Compute rate at given transmit power P_total (Watts) with fixed noise sigma2.
+    Paper Fig.9: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed.
+    """
     rates = []
     with torch.no_grad():
         for data in loader:
@@ -133,7 +137,7 @@ def rate_at_power(model, loader, sigma2):
             std = torch.std(H_re)
             p_hat, lamda_hat, cl_hat = model(H0, cl, K, mean, std)
             H_in = rearrange(H0, 'n H W k -> n k (W H)')
-            precoding_mat = pq2V(p_hat, lamda_hat, H_in, sigma2, N)
+            precoding_mat = pq2V(p_hat, lamda_hat, H_in, sigma2, N, P_total=P_total)
             Rsum, _ = SMR_loss(precoding_mat, H_in, sigma2)
             rates.append(torch.mean(Rsum).item())
     return np.mean(rates)
@@ -235,13 +239,15 @@ def main():
     results['snr_sweep'] = snr_results
 
     # ===== Rate vs P (Fig.9) =====
-    print("\n===== Rate vs P =====")
+    # Paper: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed
+    print("\n===== Rate vs P (Fig.9) =====")
     fig9 = {}
+    sigma2_fixed = 10**(-20/10)  # Fixed noise power: -20 dBW = 0.01 W
     for P_dBW in [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10]:
-        sigma2 = 0.01 * 10**(-P_dBW / 10)
-        r = rate_at_power(model, test_loader, sigma2)
+        P_total = 10**(P_dBW / 10)  # Convert dBW to Watts
+        r = rate_at_power(model, test_loader, P_total, sigma2=sigma2_fixed)
         fig9[str(P_dBW)] = r
-        print(f"  P={P_dBW:>3}dBW: rate={r:.4f}")
+        print(f"  P={P_dBW:>3}dBW ({P_total:.4f}W): rate={r:.4f}")
     results['cnn_fig9'] = fig9
 
     # ===== Rate vs alpha_N (Fig.7) =====

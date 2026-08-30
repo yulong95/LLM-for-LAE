@@ -20,7 +20,7 @@ N, K = 256, 10
 
 # ============= Args =============#
 parser = argparse.ArgumentParser()
-parser.add_argument('--gamma', type=float, default=0.99, help='Near-field power ratio constraint')
+parser.add_argument('--gamma', type=float, default=0.99, help='Maximum allowed near-field power ratio (alpha_c). Paper Fig.6/8/9 uses 0.4')
 parser.add_argument('--gamma2', type=float, default=5.0, help='Classification loss weight')
 parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--lr', type=float, default=0.0001)
@@ -92,6 +92,7 @@ def train(training_loader, validate_loader, test_loader):
         model.eval()
         epoch_val_loss = []
         epoch_val_loss_cl = []
+        epoch_alpha_N = []
         with torch.no_grad():
             for data in validate_loader:
                 H = data['H'].to(device, non_blocking=True)
@@ -102,9 +103,16 @@ def train(training_loader, validate_loader, test_loader):
                 loss_cl = criterion_test_cl(cl, torch.unsqueeze(cl_hat, dim=2))
                 epoch_val_loss.append(loss_pre.item())
                 epoch_val_loss_cl.append(loss_cl.item())
+                # Compute actual alpha_N = P_near / P_total
+                cl_expanded = cl.squeeze(-1)  # [B, K]
+                p_near = torch.sum(p_hat ** 2 * cl_expanded, dim=1)  # [B]
+                p_total = torch.sum(p_hat ** 2, dim=1)  # [B]
+                alpha_N_actual = p_near / (p_total + 1e-8)  # [B]
+                epoch_alpha_N.append(alpha_N_actual.mean().item())
 
         epoch_rate = np.nanmean(np.array(epoch_val_loss))
         epoch_acc = np.nanmean(np.array(epoch_val_loss_cl))
+        epoch_alpha_N_mean = np.nanmean(np.array(epoch_alpha_N))
         epoch_loss_val = epoch_rate + epoch_acc
 
         # MULoss for CSV (same as training, for Fig.5)
@@ -130,7 +138,7 @@ def train(training_loader, validate_loader, test_loader):
             f.write(f'{epoch+1},{train_loss_val:.7f},{val_mu_loss:.7f},{epoch_acc:.7f},{time_elapsed:.1f},{saved}\n')
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"  Epoch {epoch+1}/{args.epochs}: rate={epoch_rate:.4f} acc={epoch_acc:.4f} time={time_elapsed:.1f}s {'SAVED' if saved else ''}")
+            print(f"  Epoch {epoch+1}/{args.epochs}: rate={epoch_rate:.4f} acc={epoch_acc:.4f} alpha_N={epoch_alpha_N_mean:.4f} (gamma={args.gamma}) time={time_elapsed:.1f}s {'SAVED' if saved else ''}")
 
     # Final test
     print("\nFinal test evaluation...")

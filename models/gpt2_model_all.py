@@ -12,8 +12,17 @@ from transformers import GPT2Tokenizer
 from einops import rearrange
 
 class Gpt2Model(nn.Module):
+    """
+    GPT-2 based near-field precoding model.
+
+    Args:
+        gamma: Maximum allowed near-field power ratio (alpha_c in paper formula 12).
+               Constraint: alpha_N <= gamma, where alpha_N = P_near / P_total.
+               The model enforces this as a hard upper bound via power normalization.
+               Paper default for Fig.6/8/9: gamma=0.4 (alpha_c=0.4).
+    """
     def __init__(self,
-        model_path="", 
+        model_path="",
         Nt = 256,
         K=10,
         gamma=0.4,
@@ -24,9 +33,9 @@ class Gpt2Model(nn.Module):
         self.hidden_size = 768
         self.mlp = mlp
         self.Nt = Nt
-        self.K = K 
-        self.P_max = 1 
-        self.gamma = gamma   
+        self.K = K
+        self.P_max = 1
+        self.gamma = gamma  # alpha_c: maximum allowed near-field power ratio
         self.gpt2_model, self.gpt2_tokenizer = self.init_llm(gpt2_model_path=model_path)
         #encoder
         self.transformer_mu = Transformer(self.Nt*2, depth=3, heads=8, dim_head=64, mlp_dim=512, dropout=0.)
@@ -79,9 +88,13 @@ class Gpt2Model(nn.Module):
         p_hat = dec_out[:,:,0]
         p_sum = torch.norm(p_hat,p=2,dim=1, keepdim=True)**2
         p_normalized = p_hat/torch.sqrt(p_sum+ 1e-8)
+        # mask0: True when alpha_N (near-field power ratio) already < gamma (alpha_c)
+        # In that case, keep original normalized output; no enforcement needed
         temp_label_0 = torch.norm(p_normalized * cl,p=2,dim=1, keepdim=True)**2
         mask0 = temp_label_0 < self.gamma
 
+        # When mask0=False: enforce alpha_N = gamma by scaling near/far power separately
+        # P_near = gamma * P_max, P_far = (1-gamma) * P_max
         norm_label_1 = torch.norm(p_hat * cl,p=2,dim=1, keepdim=True)**2
         scale_1 = torch.sqrt(self.P_max * self.gamma /(norm_label_1 + 1e-8) )
         normalized_label_1 = p_hat * cl * scale_1
@@ -95,6 +108,7 @@ class Gpt2Model(nn.Module):
         lamda_hat = dec_out[:,:,1]
         lamda_sum = torch.sum(lamda_hat, dim=1, keepdim=True)
         lamda_normalized = lamda_hat/ (lamda_sum+ 1e-8)
+        # Same constraint as p_hat: alpha_N_lamda <= gamma
         temp_label_1 = torch.sum(lamda_normalized * cl,dim=1, keepdim=True)
         mask1 = temp_label_1 < self.gamma
 
