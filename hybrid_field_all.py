@@ -104,10 +104,11 @@ def train(training_loader, validate_loader, test_loader):
                 V = pq2V(p_hat, lamda_hat, H, sigma2_val, N)
                 V_complex = torch.view_as_complex(V.contiguous())  # [B, Nt, 1, K]
                 V_power = torch.abs(V_complex) ** 2
-                user_power = torch.sum(V_power, dim=(1, 2, 3))  # [B]
+                user_power = torch.sum(V_power, dim=(1, 2))  # [B, K]
                 cl_labels = cl.squeeze(-1)  # [B, K]
-                p_near = torch.sum(user_power.unsqueeze(-1) * cl_labels, dim=1)  # [B]
-                alpha_N_actual = p_near / (user_power + 1e-8)  # [B]
+                p_near = torch.sum(user_power * cl_labels, dim=1)  # [B]
+                p_total = torch.sum(user_power, dim=1)  # [B]
+                alpha_N_actual = p_near / (p_total + 1e-8)  # [B]
                 epoch_alpha_N.append(alpha_N_actual.mean().item())
 
         epoch_rate = np.nanmean(np.array(epoch_val_loss))

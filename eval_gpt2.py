@@ -103,12 +103,12 @@ def compute_alpha_N(V, cl, sigma2):
     Nt = 256
     V_complex = torch.view_as_complex(V.contiguous())  # [B, Nt, 1, K]
     V_power = torch.abs(V_complex) ** 2  # [B, Nt, 1, K]
-    user_power = torch.sum(V_power, dim=(1, 2, 3))  # [B] — ||V_k||² per sample
+    user_power = torch.sum(V_power, dim=(1, 2))  # [B, K] — ||V_k||² per user
     # cl: [B, K, 1] → [B, K], 1=near-field, 0=far-field
     cl_labels = cl.squeeze(-1)  # [B, K]
     near_mask = cl_labels  # [B, K], 1 for near-field users
-    p_near = torch.sum(user_power.unsqueeze(-1) * near_mask, dim=1)  # [B]
-    p_total = user_power  # [B]
+    p_near = torch.sum(user_power * near_mask, dim=1)  # [B]
+    p_total = torch.sum(user_power, dim=1)  # [B]
     alpha_N = p_near / (p_total + 1e-8)  # [B]
     return alpha_N.mean().item()
 
