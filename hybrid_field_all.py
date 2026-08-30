@@ -1,7 +1,7 @@
 """
 hybrid_field_all.py — GPT2 training (supports --gamma and --gamma2)
 Usage:
-  python hybrid_field_all.py                    # default: gamma=0.99, gamma2=5.0
+  python hybrid_field_all.py                    # default: gamma=0.4, gamma2=5.0
   python hybrid_field_all.py --gamma 0.5        # sweep gamma
   python hybrid_field_all.py --gamma2 10        # sweep gamma2
 """
