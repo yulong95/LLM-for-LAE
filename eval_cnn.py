@@ -1,12 +1,9 @@
 """
-eval_cnn.py — All-in-one CNN evaluation
-Usage:
-  python eval_cnn.py              # full evaluation
-  python eval_cnn.py --quick      # skip timing (faster)
+eval_cnn.py — Official CNN evaluation
+Generates: Fig.6 (K sweep), Table I (SNR sweep), Fig.9 (Rate vs P)
 """
 import os, sys, argparse, glob, json, time
 import torch
-import torch.nn.functional as F
 import numpy as np
 from einops import rearrange
 from models.baseline_CNN import CNN_pre
@@ -31,11 +28,6 @@ args = parser.parse_args()
 
 # ===================== Model loading =====================#
 def find_latest_run(gamma=0.8):
-    """Find latest CNN run matching the requested gamma.
-    gamma=0.8 (default): search CNN_* but exclude CNN_gamma* directories.
-    gamma!=0.8: search CNN_gamma{gamma}_* directories only.
-    Raises FileNotFoundError if no matching checkpoint is found.
-    """
     if gamma == 0.8:
         runs = sorted(glob.glob(os.path.join(base_output, "CNN_*")))
         valid = [r for r in runs
@@ -55,21 +47,6 @@ def find_latest_run(gamma=0.8):
 def build_model(run_dir=None, gamma=0.8):
     if run_dir is None:
         run_dir = find_latest_run(gamma)
-    # Verify run directory name matches requested gamma
-    run_name = os.path.basename(run_dir)
-    if gamma == 0.8:
-        if 'gamma' in run_name:
-            raise ValueError(
-                f"gamma=0.8 但找到 gamma-specific 目录: {run_name}，"
-                f"请检查 find_latest_run 逻辑"
-            )
-    else:
-        expected_tag = f"gamma{gamma:.1f}"
-        if expected_tag not in run_name:
-            raise ValueError(
-                f"gamma={gamma} 但目录名不含 '{expected_tag}': {run_name}，"
-                f"请检查 find_latest_run 逻辑"
-            )
     model = CNN_pre(N, K, gamma=gamma)
     model.to(device)
     ckpts = sorted(glob.glob(os.path.join(run_dir, '*.pth')), key=os.path.getmtime)
@@ -95,7 +72,6 @@ def load_test_set():
 
 
 def cnn_forward(model, H_raw, cl, K_eval):
-    """Standard CNN forward pass with padding."""
     H_re = rearrange(H_raw, 'n k W H -> n H W k', H=2)
     H0 = torch.zeros(H_re.shape, device=device)
     H_sliced = H_re[:, :, :, :K_eval]
@@ -136,7 +112,6 @@ def eval_snr(model, loader, snr_db):
             cl = data['cl'].to(device, non_blocking=True)
             H_re = rearrange(H, 'n k W H -> n H W k', H=2)
             H_sliced = H_re[:, :, :, :K]
-            # Bypass internal noise, add external noise
             original_noise = model.noise
             model.noise = lambda h, s: h
             sigma_ext = 10 ** (-snr_db / 10)
@@ -144,7 +119,6 @@ def eval_snr(model, loader, snr_db):
             noise = noise * torch.sqrt(torch.mean(torch.abs(H_sliced) ** 2))
             H_sliced = H_sliced + noise
             model.noise = original_noise
-
             H0 = torch.zeros(H_re.shape, device=device)
             H0[:, :, :, :K] = H_sliced
             mean = torch.mean(H_sliced)
@@ -159,10 +133,6 @@ def eval_snr(model, loader, snr_db):
 
 
 def rate_at_power(model, loader, P_total, sigma2=0.01):
-    """
-    Compute rate at given transmit power P_total (Watts) with fixed noise sigma2.
-    Paper Fig.9: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed.
-    """
     rates = []
     with torch.no_grad():
         for data in loader:
@@ -179,73 +149,6 @@ def rate_at_power(model, loader, P_total, sigma2=0.01):
             Rsum, _ = SMR_loss(precoding_mat, H_in, sigma2)
             rates.append(torch.mean(Rsum).item())
     return np.mean(rates)
-
-
-def rate_with_gamma(model, loader, gamma):
-    original_gamma = model.gamma
-    model.gamma = gamma
-    rates = []
-    with torch.no_grad():
-        for data in loader:
-            H = data['H'].to(device, non_blocking=True)
-            cl = data['cl'].to(device, non_blocking=True)
-            H_re = rearrange(H, 'n k W H -> n H W k', H=2)
-            H0 = torch.zeros(H_re.shape, device=device)
-            H0[:, :, :, :K] = H_re[:, :, :, :K]
-            mean = torch.mean(H_re)
-            std = torch.std(H_re)
-            p_hat, lamda_hat, cl_hat = model(H0, cl, K, mean, std)
-            H_in = rearrange(H0, 'n H W k -> n k (W H)')
-            sigma2 = 10**(-20/10)
-            precoding_mat = pq2V(p_hat, lamda_hat, H_in, sigma2, N)
-            Rsum, _ = SMR_loss(precoding_mat, H_in, sigma2)
-            rates.append(torch.mean(Rsum).item())
-    model.gamma = original_gamma
-    return np.mean(rates)
-
-
-def rate_with_rmin(model, loader, rmin):
-    rates = []
-    with torch.no_grad():
-        for data in loader:
-            H = data['H'].to(device, non_blocking=True)
-            cl = data['cl'].to(device, non_blocking=True)
-            H_re = rearrange(H, 'n k W H -> n H W k', H=2)
-            H0 = torch.zeros(H_re.shape, device=device)
-            H0[:, :, :, :K] = H_re[:, :, :, :K]
-            mean = torch.mean(H_re)
-            std = torch.std(H_re)
-            p_hat, lamda_hat, cl_hat = model(H0, cl, K, mean, std)
-            H_in = rearrange(H0, 'n H W k -> n k (W H)')
-            sigma2 = 10**(-20/10)
-            precoding_mat = pq2V(p_hat, lamda_hat, H_in, sigma2, N)
-            Rsum, single_rate = SMR_loss(precoding_mat, H_in, sigma2)
-            penalty = F.relu(rmin - single_rate) * 10.0
-            penalty = torch.sum(penalty, dim=1)
-            adjusted_rate = torch.mean(Rsum) - torch.mean(penalty)
-            rates.append(adjusted_rate.item())
-    return np.mean(rates)
-
-
-def measure_timing(model, n_runs=50):
-    total_params = sum(p.numel() for p in model.parameters())
-    learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    dummy_H = torch.randn(1, K, N, 2).to(device)
-    dummy_cl = torch.ones(1, K).to(device)
-    # Warmup
-    with torch.no_grad():
-        for _ in range(5):
-            H = rearrange(dummy_H, 'n k W H -> n H W k', H=2)
-            model(H, dummy_cl, K, torch.tensor(0.0), torch.tensor(1.0))
-    times = []
-    with torch.no_grad():
-        for _ in range(n_runs):
-            t0 = time.time()
-            H = rearrange(dummy_H, 'n k W H -> n H W k', H=2)
-            model(H, dummy_cl, K, torch.tensor(0.0), torch.tensor(1.0))
-            torch.cuda.synchronize()
-            times.append(time.time() - t0)
-    return total_params, learnable_params, np.mean(times) * 1000
 
 
 # ===================== Main =====================#
@@ -277,43 +180,15 @@ def main():
     results['snr_sweep'] = snr_results
 
     # ===== Rate vs P (Fig.9) =====
-    # Paper: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed
     print("\n===== Rate vs P (Fig.9) =====")
     fig9 = {}
-    sigma2_fixed = 10**(-20/10)  # Fixed noise power: -20 dBW = 0.01 W
+    sigma2_fixed = 10**(-20/10)
     for P_dBW in [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10]:
-        P_total = 10**(P_dBW / 10)  # Convert dBW to Watts
+        P_total = 10**(P_dBW / 10)
         r = rate_at_power(model, test_loader, P_total, sigma2=sigma2_fixed)
         fig9[str(P_dBW)] = r
         print(f"  P={P_dBW:>3}dBW ({P_total:.4f}W): rate={r:.4f}")
     results['cnn_fig9'] = fig9
-
-    # ===== Rate vs alpha_N (Fig.7) =====
-    print("\n===== Rate vs alpha_N =====")
-    fig7 = {}
-    for alpha in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
-        r = rate_with_gamma(model, test_loader, alpha)
-        fig7[str(alpha)] = r
-        print(f"  alpha={alpha:.1f}: rate={r:.4f}")
-    results['cnn_fig7'] = fig7
-
-    # ===== Rate vs Rmin (Fig.8) =====
-    print("\n===== Rate vs Rmin =====")
-    fig8 = {}
-    for rmin in [0, 0.2, 0.4, 0.6, 0.8, 1.0]:
-        r = rate_with_rmin(model, test_loader, rmin)
-        fig8[str(rmin)] = r
-        print(f"  Rmin={rmin:.1f}: rate={r:.4f}")
-    results['cnn_fig8'] = fig8
-
-    # ===== Timing & params (Table II) =====
-    if not args.quick:
-        print("\n===== Timing & Parameters =====")
-        total_p, learn_p, inf_ms = measure_timing(model)
-        print(f"  CNN: total={total_p/1e6:.5f}M  learnable={learn_p/1e6:.5f}M  inference={inf_ms:.2f}ms")
-        results['timing'] = {
-            'CNN': {'total_params': total_p, 'learnable_params': learn_p, 'inference_ms': inf_ms},
-        }
 
     # Save
     out_path = os.path.join(base_output, 'eval_cnn_results.json')

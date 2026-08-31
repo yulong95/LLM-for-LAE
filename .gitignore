@@ -4,6 +4,10 @@ Data_user.mat
 # Training output (checkpoints, logs, 2GB+)
 output/
 
+# Model checkpoints
+*.bin
+*.pth
+
 # Python cache
 __pycache__/
 *.pyc

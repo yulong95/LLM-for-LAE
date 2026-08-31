@@ -1,0 +1,2 @@
+epoch,train_loss,val_loss,val_acc,time_sec,saved
+1,-30.9547760,-32.2465218,0.7865000,32.2,True

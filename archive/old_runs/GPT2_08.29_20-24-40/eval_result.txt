@@ -1,0 +1,4 @@
+gamma=0.99
+gamma2=5.0
+Test Rate: 32.3899
+Test Accuracy: 0.9910

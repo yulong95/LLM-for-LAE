@@ -1,12 +1,12 @@
 """
-eval_gpt2.py — All-in-one GPT2 evaluation
-Usage:
-  python eval_gpt2.py              # full evaluation
-  python eval_gpt2.py --quick      # skip timing (faster)
+eval_gpt2.py — Official GPT2 evaluation
+Generates: Fig.6 (K sweep), Table I (SNR sweep), Fig.9 (Rate vs P)
+
+Fig.7/8 data must come from separate gamma/Rmin training sweeps,
+not from post-processing a single model.
 """
 import os, sys, argparse, glob, json, time
 import torch
-import torch.nn.functional as F
 import numpy as np
 from einops import rearrange
 from models.gpt2_model_all import Gpt2Model
@@ -32,16 +32,6 @@ args = parser.parse_args()
 
 # ===================== Model loading =====================#
 def find_latest_run(gamma=0.4):
-    """Find latest GPT2 run directory matching the requested gamma.
-
-    Training output naming (hybrid_field_all.py):
-      gamma=0.4 (default) → GPT2_YYYY*     (no gamma suffix)
-      gamma!=0.4           → GPT2_gammaX_YYYY*
-
-    Search rules:
-      gamma=0.4 → GPT2_* excluding directories with 'gamma' in name
-      gamma!=0.4 → GPT2_gamma{gamma}_*
-    """
     if gamma == 0.4:
         runs = sorted(glob.glob(os.path.join(base_output, "GPT2_*")))
         valid = [r for r in runs if glob.glob(os.path.join(r, '*.bin'))
@@ -86,30 +76,13 @@ def load_test_set():
 
 # ===================== Eval helpers =====================#
 def compute_alpha_N(V, cl, sigma2):
-    """
-    Compute actual near-field power ratio from the final precoding matrix V.
-    alpha_N = sum(||V_k||² for near-field users) / sum(||V_k||² for all users)
-
-    This uses the final V (after MMSE beamforming + global power scaling),
-    which is the true transmit power for each user.
-
-    Note: p_hat² is NOT strictly equal to ||V_k||² because:
-      1. The MMSE beamformer W_k depends on all users' power allocations
-      2. Global power scaling factor sqrt(P_total/current_power) is applied
-    However, since the global scaling is identical for all users, the RATIO
-    p_near²/p_total² equals ||V_near||²/||V_total||². This function computes
-    from V directly for strict equivalence.
-    """
-    Nt = 256
-    V_complex = torch.view_as_complex(V.contiguous())  # [B, Nt, 1, K]
-    V_power = torch.abs(V_complex) ** 2  # [B, Nt, 1, K]
-    user_power = torch.sum(V_power, dim=(1, 2))  # [B, K] — ||V_k||² per user
-    # cl: [B, K, 1] → [B, K], 1=near-field, 0=far-field
-    cl_labels = cl.squeeze(-1)  # [B, K]
-    near_mask = cl_labels  # [B, K], 1 for near-field users
-    p_near = torch.sum(user_power * near_mask, dim=1)  # [B]
-    p_total = torch.sum(user_power, dim=1)  # [B]
-    alpha_N = p_near / (p_total + 1e-8)  # [B]
+    V_complex = torch.view_as_complex(V.contiguous())
+    V_power = torch.abs(V_complex) ** 2
+    user_power = torch.sum(V_power, dim=(1, 2))
+    cl_labels = cl.squeeze(-1)
+    p_near = torch.sum(user_power * cl_labels, dim=1)
+    p_total = torch.sum(user_power, dim=1)
+    alpha_N = p_near / (p_total + 1e-8)
     return alpha_N.mean().item()
 
 
@@ -146,7 +119,6 @@ def eval_snr(model, loader, snr_db):
             H = data['H'].to(device, non_blocking=True)
             cl = data['cl'].to(device, non_blocking=True)
             H = rearrange(H, 'n W H a -> n W (H a)')
-            # Bypass internal noise, add proper complex AWGN
             original_noise = model.noise
             model.noise = lambda h, s: h
             H_4d = H.reshape(*H.shape[:-1], H.shape[-1] // 2, 2)
@@ -166,10 +138,6 @@ def eval_snr(model, loader, snr_db):
 
 
 def rate_at_power(model, loader, P_total, sigma2=0.01):
-    """
-    Compute rate at given transmit power P_total (Watts) with fixed noise sigma2.
-    Paper Fig.9: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed.
-    """
     rates = []
     with torch.no_grad():
         for data in loader:
@@ -181,63 +149,6 @@ def rate_at_power(model, loader, P_total, sigma2=0.01):
             Rsum, _ = SMR_loss(precoding_mat, H, sigma2)
             rates.append(torch.mean(Rsum).item())
     return np.mean(rates)
-
-
-def rate_with_gamma(model, loader, gamma):
-    original_gamma = model.gamma
-    model.gamma = gamma
-    rates = []
-    with torch.no_grad():
-        for data in loader:
-            H = data['H'].to(device, non_blocking=True)
-            cl = data['cl'].to(device, non_blocking=True)
-            H = rearrange(H, 'n W H a -> n W (H a)')
-            p_hat, lamda_hat, cl_hat = model(H, cl)
-            sigma2 = 10**(-20/10)
-            precoding_mat = pq2V(p_hat, lamda_hat, H, sigma2, N)
-            Rsum, _ = SMR_loss(precoding_mat, H, sigma2)
-            rates.append(torch.mean(Rsum).item())
-    model.gamma = original_gamma
-    return np.mean(rates)
-
-
-def rate_with_rmin(model, loader, rmin):
-    rates = []
-    with torch.no_grad():
-        for data in loader:
-            H = data['H'].to(device, non_blocking=True)
-            cl = data['cl'].to(device, non_blocking=True)
-            H = rearrange(H, 'n W H a -> n W (H a)')
-            p_hat, lamda_hat, cl_hat = model(H, cl)
-            sigma2 = 10**(-20/10)
-            precoding_mat = pq2V(p_hat, lamda_hat, H, sigma2, N)
-            Rsum, single_rate = SMR_loss(precoding_mat, H, sigma2)
-            penalty = F.relu(rmin - single_rate) * 10.0
-            penalty = torch.sum(penalty, dim=1)
-            adjusted_rate = torch.mean(Rsum) - torch.mean(penalty)
-            rates.append(adjusted_rate.item())
-    return np.mean(rates)
-
-
-def measure_timing(model, n_runs=50):
-    total_params = sum(p.numel() for p in model.parameters())
-    learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    dummy_H = torch.randn(1, K, N, 2).to(device)
-    dummy_cl = torch.ones(1, K).to(device)
-    # Warmup
-    with torch.no_grad():
-        for _ in range(5):
-            H = rearrange(dummy_H, 'n W H a -> n W (H a)')
-            model(H, dummy_cl)
-    times = []
-    with torch.no_grad():
-        for _ in range(n_runs):
-            t0 = time.time()
-            H = rearrange(dummy_H, 'n W H a -> n W (H a)')
-            model(H, dummy_cl)
-            torch.cuda.synchronize()
-            times.append(time.time() - t0)
-    return total_params, learnable_params, np.mean(times) * 1000
 
 
 # ===================== Main =====================#
@@ -256,7 +167,7 @@ def main():
     for k in range(5, 11):
         r, a, alpha_N = eval_k(model, test_loader, k)
         k_results[k] = {'gpt2_rate': r, 'gpt2_acc': a, 'alpha_N': alpha_N}
-        print(f"  K={k}: rate={r:.4f} acc={a:.4f} alpha_N={alpha_N:.4f} (gamma={model.gamma})")
+        print(f"  K={k}: rate={r:.4f} acc={a:.4f} alpha_N={alpha_N:.4f}")
     results['k_sweep'] = k_results
 
     # ===== SNR sweep (Table I) =====
@@ -269,87 +180,39 @@ def main():
     results['snr_sweep'] = snr_results
 
     # ===== Rate vs P (Fig.9) =====
-    # Paper: P varies from -10 to 10 dBW, sigma^2 = -20 dBW = 0.01 W fixed
     print("\n===== Rate vs P (Fig.9) =====")
     fig9 = {}
-    sigma2_fixed = 10**(-20/10)  # Fixed noise power: -20 dBW = 0.01 W
+    sigma2_fixed = 10**(-20/10)
     for P_dBW in [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10]:
-        P_total = 10**(P_dBW / 10)  # Convert dBW to Watts
+        P_total = 10**(P_dBW / 10)
         r = rate_at_power(model, test_loader, P_total, sigma2=sigma2_fixed)
         fig9[str(P_dBW)] = r
         print(f"  P={P_dBW:>3}dBW ({P_total:.4f}W): rate={r:.4f}")
     results['fig9'] = fig9
 
-    # ===== Rate vs alpha_N (Fig.7) =====
-    print("\n===== Rate vs alpha_N =====")
-    fig7 = {}
-    for alpha in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
-        r = rate_with_gamma(model, test_loader, alpha)
-        fig7[str(alpha)] = r
-        print(f"  alpha={alpha:.1f}: rate={r:.4f}")
-    results['fig7'] = fig7
-
-    # ===== Rate vs Rmin (Fig.8) =====
-    print("\n===== Rate vs Rmin =====")
-    fig8 = {}
-    for rmin in [0, 0.2, 0.4, 0.6, 0.8, 1.0]:
-        r = rate_with_rmin(model, test_loader, rmin)
-        fig8[str(rmin)] = r
-        print(f"  Rmin={rmin:.1f}: rate={r:.4f}")
-    results['fig8'] = fig8
-
-    # ===== Alpha_c sweep: gamma-trained models (Fig.7) =====
-    # Each model trained with a different alpha_c (gamma) constraint
-    print("\n===== Alpha_c sweep: gamma-trained models (Fig.7) =====")
-    gamma_results = {}
-    for gamma in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
-        pattern = os.path.join(base_output, f"GPT2_gamma{gamma:.1f}_*")
-        runs = sorted(glob.glob(pattern))
-        if not runs:
-            continue
-        run_dir_g = runs[-1]
-        ckpts = sorted(glob.glob(os.path.join(run_dir_g, '*.bin')), key=lambda x: int(os.path.basename(x).split('.')[0]))
-        if not ckpts:
-            continue
-        model_g = Gpt2Model(model_path=gpt2_model_path, Nt=N, K=K, gamma=gamma)
-        model_g.to(device)
-        loaded = False
-        for ck in reversed(ckpts):
-            try:
-                model_g.load_state_dict(torch.load(ck, map_location=device, weights_only=True))
-                loaded = True
-                break
-            except:
-                continue
-        if not loaded:
-            continue
-        model_g.eval()
-        criterion_rate = RateCal().to(device)
-        criterion_acc = ACCLoss().to(device)
-        rates_g, accs_g = [], []
-        with torch.no_grad():
-            for data in test_loader:
-                H = data['H'].to(device, non_blocking=True)
-                cl = data['cl'].to(device, non_blocking=True)
-                H_in = rearrange(H, 'n W H a -> n W (H a)')
-                p_hat, lamda_hat, cl_hat = model_g(H_in, cl)
-                r = criterion_rate(p_hat, lamda_hat, H_in).item()
-                a = criterion_acc(cl, torch.unsqueeze(cl_hat, dim=2)).item()
-                rates_g.append(r)
-                accs_g.append(a)
-        gamma_results[str(gamma)] = {'rate': np.mean(rates_g), 'acc': np.mean(accs_g)}
-        print(f"  alpha_c={gamma:.1f}: rate={np.mean(rates_g):.4f} acc={np.mean(accs_g):.4f}")
-        del model_g
-        torch.cuda.empty_cache()
-    results['gamma_sweep'] = gamma_results
-
-    # ===== Timing & params (Table II) =====
+    # ===== Timing (Table II) =====
     if not args.quick:
         print("\n===== Timing & Parameters =====")
-        total_p, learn_p, inf_ms = measure_timing(model)
-        print(f"  GPT2: total={total_p/1e6:.5f}M  learnable={learn_p/1e6:.5f}M  inference={inf_ms:.2f}ms")
+        total_params = sum(p.numel() for p in model.parameters())
+        learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        dummy_H = torch.randn(1, K, N, 2).to(device)
+        dummy_cl = torch.ones(1, K).to(device)
+        with torch.no_grad():
+            for _ in range(5):
+                H = rearrange(dummy_H, 'n W H a -> n W (H a)')
+                model(H, dummy_cl)
+        times = []
+        with torch.no_grad():
+            for _ in range(50):
+                t0 = time.time()
+                H = rearrange(dummy_H, 'n W H a -> n W (H a)')
+                model(H, dummy_cl)
+                torch.cuda.synchronize()
+                times.append(time.time() - t0)
+        inf_ms = np.mean(times) * 1000
+        print(f"  GPT2: total={total_params/1e6:.5f}M  learnable={learnable_params/1e6:.5f}M  inference={inf_ms:.2f}ms")
         results['timing'] = {
-            'gpt2': {'total_params': total_p, 'learnable_params': learn_p, 'inference_ms': inf_ms},
+            'gpt2': {'total_params': total_params, 'learnable_params': learnable_params, 'inference_ms': inf_ms},
         }
 
     # Save
