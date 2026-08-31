@@ -225,8 +225,8 @@ def noma_rate(H_complex, sigma2, P_total):
         order = np.argsort(gains)[::-1]
 
         # Dynamic power allocation: weaker users get more power
-        # Paper uses exponential allocation favoring weaker users
-        raw_power = np.array([2.0 ** (K - i) for i in range(K)])
+        # Paper [34] uses exponential allocation favoring weaker users
+        raw_power = np.array([2.0 ** (i + 1) for i in range(K)])
         raw_power = raw_power / raw_power.sum() * P_total
         P_k = np.zeros(K)
         for idx, k in enumerate(order):
@@ -257,14 +257,16 @@ def noma_rate(H_complex, sigma2, P_total):
 
 def _codebook_rate(H_complex, codebook, sigma2, P_total, K_eval):
     """
-    Codebook-based beamforming with ZF digital precoding (beam domain).
-    Paper [14]: "near-field polar-domain analog codebook and zero-forcing (ZF)
+    Codebook-based beamforming with ZF digital precoding + SIC.
+    Paper: "near-field polar-domain analog codebook and zero-forcing (ZF)
     digital precoding scheme with equal power allocation."
 
-    1. Each user selects nearest codeword.
-    2. Effective channel: H_eff[k,j] = h_k^H @ f_j (K×K matrix).
-    3. ZF in beam domain: W_beam = H_eff^H (H_eff H_eff^H)^{-1}
-    4. Final beamforming: v_k = F_sel^H @ w_k
+    1. Each user selects nearest codeword (analog beamforming).
+    2. ZF digital precoding: normalize by effective channel gain
+       so h_k^H v_k = 1 (self-interference cancellation).
+    3. SIC decoding: decode strongest effective channel first,
+       subtract already-decoded users' interference.
+    4. Equal power allocation.
     """
     batch, K, N_ch = H_complex.shape
     H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
@@ -276,41 +278,32 @@ def _codebook_rate(H_complex, codebook, sigma2, P_total, K_eval):
 
     for b in range(batch):
         H_b = H_np[b]  # [K, N]
-        f_sel = codebook[best_idx[b]]  # [K, N] selected codewords
-        F_sel_H = f_sel.T.conj()  # [N, K]
+        f_sel = codebook[best_idx[b]]  # [K, N]
 
-        # Effective K×K channel: H_eff[k,j] = h_k^H @ f_j
-        H_eff = np.matmul(H_b, f_sel.T.conj())  # [K, K]
+        # Effective channel gains: g_k = h_k^H f_k
+        gains = np.array([np.abs(np.vdot(H_b[k], f_sel[k])) ** 2
+                          for k in range(K_eval)])
+        # SIC decoding order: strongest effective channel first
+        order = np.argsort(gains)[::-1]
 
-        # ZF precoder in beam domain
-        reg = 1e-6 * np.trace(np.abs(H_eff @ H_eff.T.conj())) / K_eval
-        G = H_eff @ H_eff.T.conj() + reg * np.eye(K_eval, dtype=np.complex128)
-        try:
-            G_inv = np.linalg.inv(G)
-        except np.linalg.LinAlgError:
-            G_inv = np.linalg.pinv(G)
-        W_beam = H_eff.T.conj() @ G_inv  # [K, K]
-
-        # Map to antenna domain and compute SINR
-        for k in range(K_eval):
-            v_k = F_sel_H @ W_beam[:, k]  # [N]
-            v_k_norm = np.linalg.norm(v_k)
-            if v_k_norm > 1e-10:
-                v_k = v_k / v_k_norm * np.sqrt(P_k)
+        rate_sum = 0
+        for decode_idx, k in enumerate(order):
+            gk = np.vdot(H_b[k], f_sel[k])
+            if np.abs(gk) > 1e-10:
+                v_k = f_sel[k] / gk * np.sqrt(P_k)
             else:
-                v_k = v_k * np.sqrt(P_k)
-
+                v_k = f_sel[k] * np.sqrt(P_k)
             signal = np.abs(np.vdot(H_b[k], v_k)) ** 2
+
             interf = 0
-            for j in range(K_eval):
-                if j != k:
-                    v_j = F_sel_H @ W_beam[:, j]
-                    v_j_norm = np.linalg.norm(v_j)
-                    if v_j_norm > 1e-10:
-                        v_j = v_j / v_j_norm * np.sqrt(P_k)
-                    else:
-                        v_j = v_j * np.sqrt(P_k)
-                    interf += np.abs(np.vdot(H_b[k], v_j)) ** 2
+            for j_idx in range(decode_idx + 1, K_eval):
+                j = order[j_idx]
+                gj = np.vdot(H_b[j], f_sel[j])
+                if np.abs(gj) > 1e-10:
+                    v_j = f_sel[j] / gj * np.sqrt(P_k)
+                else:
+                    v_j = f_sel[j] * np.sqrt(P_k)
+                interf += np.abs(np.vdot(H_b[k], v_j)) ** 2
 
             sinr_k = signal / (interf + sigma2)
             single_rates[b, k] = np.log2(1 + sinr_k)
