@@ -227,8 +227,9 @@ def dpc_rate(H_complex, sigma2, P_total):
 
 def noma_rate(H_complex, sigma2, P_total):
     """
-    Near-field NOMA: polar codebook + beam grouping + ZF + SIC.
-    Same ZF structure as LDMA, with beam grouping for SIC when users share beams.
+    Near-field NOMA: beam grouping + ZF among beams + SIC within beams.
+    Users sharing a beam get the same precoder; ZF eliminates inter-beam interference.
+    SIC within each beam decodes strongest user first, subtracting their signal.
     """
     batch, K, _ = H_complex.shape
     H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
@@ -239,30 +240,58 @@ def noma_rate(H_complex, sigma2, P_total):
 
     for b in range(batch):
         H_b = H_np[b]
-        f_sel = POLAR_CB[best_idx[b]]  # [K, N]
-        F_sel_H = f_sel.T.conj()  # [N, K]
 
-        # ZF on K×K effective channel (same as LDMA)
+        # Beam grouping
+        beam_of_user = best_idx[b]
+        beam_groups = {}
+        for k in range(K):
+            bi = beam_of_user[k]
+            if bi not in beam_groups:
+                beam_groups[bi] = []
+            beam_groups[bi].append((k, np.sum(np.abs(H_b[k]) ** 2)))
+        for bi in beam_groups:
+            beam_groups[bi].sort(key=lambda x: -x[1])
+
+        beam_list = sorted(beam_groups.keys())
+        rf_num = len(beam_list)
+
+        # ZF on K×K effective channel (same computation as LDMA)
+        f_sel = POLAR_CB[beam_of_user]  # [K, N] — each user's best codeword
+        F_sel_H = f_sel.T.conj()  # [N, K]
         H_eff = np.matmul(H_b, F_sel_H)  # [K, K]
         F_zf = np.linalg.pinv(H_eff)  # [K, K]
 
-        # Normalize F_zf by Frobenius norm of total precoder
-        norm_cal = np.linalg.norm(np.matmul(F_sel_H, F_zf), 'fro')
-        if norm_cal > 1e-10:
-            F_zf = F_zf / norm_cal * np.sqrt(P_total)
+        # Build total precoder: weak users share strong user's precoder
+        F_sel_H_zf = np.matmul(F_sel_H, F_zf)  # [N, K]
+        F_total = np.zeros((H_b.shape[1], K), dtype=np.complex128)
+        for bi in beam_list:
+            strong_k = beam_groups[bi][0][0]  # strongest user in this beam
+            for k, _ in beam_groups[bi]:
+                F_total[:, k] = F_sel_H_zf[:, strong_k]
 
-        F_total = np.matmul(F_sel_H, F_zf)  # [N, K]
+        # Frobenius normalization (same as LDMA: F_total = F_total/norm(F_total,'fro')*sqrt(P_total))
+        norm_cal = np.linalg.norm(F_total, 'fro')
+        if norm_cal > 1e-10:
+            F_total = F_total / norm_cal * np.sqrt(P_total)
 
         # Effective channel
         H_eq = np.matmul(H_b, F_total)  # [K, K]
         gains = np.abs(H_eq) ** 2
 
-        # Sum-rate with SIC (same as LDMA for now, since ZF eliminates inter-user interference)
-        for k in range(K):
-            signal = gains[k, k]
-            interf = np.sum(gains[k, :]) - signal
-            sinr_k = signal / (interf + sigma2)
-            single_rates[b, k] = np.log2(1 + sinr_k)
+        # SIC decoding within each beam
+        for bi in beam_list:
+            users_in_beam = [u for u, _ in beam_groups[bi]]
+            # Sort by effective channel gain (strongest first)
+            users_sorted = sorted(users_in_beam, key=lambda u: -gains[u, u])
+            for decode_idx, k in enumerate(users_sorted):
+                signal = gains[k, k]
+                # Interference from not-yet-decoded users (weaker in same beam)
+                interf = 0.0
+                for j in users_sorted:
+                    if users_sorted.index(j) > decode_idx:
+                        interf += gains[k, j]
+                sinr_k = signal / (interf + sigma2)
+                single_rates[b, k] = np.log2(1 + sinr_k)
         sum_rates[b] = single_rates[b].sum()
 
     return (torch.tensor(sum_rates, dtype=torch.float32).to(device),
