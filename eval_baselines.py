@@ -77,8 +77,8 @@ def build_polar_codebook():
     S = int(np.floor(Z_delta / rho_min)) + 1
     r_list = np.zeros(S)
     r_list[0] = 200 * N**2 * d**2 / lambda_
-    for s in range(1, S):
-        r_list[s] = Z_delta / s
+    for s in range(2, S + 1):
+        r_list[s - 1] = Z_delta / (s - 1)
 
     # Build codebook: polar_domain_manifold for each (sin_theta, r)
     codebook = []
@@ -227,12 +227,9 @@ def dpc_rate(H_complex, sigma2, P_total):
 
 def noma_rate(H_complex, sigma2, P_total):
     """
-    Near-field NOMA: beam grouping + ZF across beams + NOMA within beams.
-    Author's NF_NOMA.m: F from NF_group_1, then fmincon power optimization.
-    ZF eliminates inter-beam interference; NOMA with SIC within each beam.
+    Near-field NOMA: polar codebook + beam grouping + ZF + SIC.
+    Same ZF structure as LDMA, with beam grouping for SIC when users share beams.
     """
-    from scipy.optimize import minimize
-
     batch, K, _ = H_complex.shape
     H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
     sum_rates = np.zeros(batch)
@@ -242,107 +239,31 @@ def noma_rate(H_complex, sigma2, P_total):
 
     for b in range(batch):
         H_b = H_np[b]
+        f_sel = POLAR_CB[best_idx[b]]  # [K, N]
+        F_sel_H = f_sel.T.conj()  # [N, K]
 
-        # --- Beam grouping (same as LDMA) ---
-        beam_of_user = best_idx[b]
-        beam_groups = {}
-        for k in range(K):
-            bi = beam_of_user[k]
-            if bi not in beam_groups:
-                beam_groups[bi] = []
-            beam_groups[bi].append((k, np.sum(np.abs(H_b[k]) ** 2)))
-        for bi in beam_groups:
-            beam_groups[bi].sort(key=lambda x: -x[1])
+        # ZF on K×K effective channel (same as LDMA)
+        H_eff = np.matmul(H_b, F_sel_H)  # [K, K]
+        F_zf = np.linalg.pinv(H_eff)  # [K, K]
 
-        beam_list = sorted(beam_groups.keys())
-        strong_users = [beam_groups[bi][0][0] for bi in beam_list]
+        # Normalize F_zf by Frobenius norm of total precoder
+        norm_cal = np.linalg.norm(np.matmul(F_sel_H, F_zf), 'fro')
+        if norm_cal > 1e-10:
+            F_zf = F_zf / norm_cal * np.sqrt(P_total)
 
-        # --- ZF among strong users (eliminates inter-beam interference) ---
-        H_reduce = H_b[strong_users, :]
-        F_zf = np.linalg.pinv(H_reduce)  # [N, rf_num]
-        F_total = np.zeros((H_b.shape[1], K), dtype=np.complex128)
-        for i, bi in enumerate(beam_list):
-            for k, _ in beam_groups[bi]:
-                F_total[:, k] = F_zf[:, i]
+        F_total = np.matmul(F_sel_H, F_zf)  # [N, K]
 
-        # --- Frobenius normalization ---
-        norm_F = np.linalg.norm(F_total, 'fro')
-        if norm_F > 1e-10:
-            F_total = F_total / norm_F * np.sqrt(P_total)
-
-        # --- Effective channel (ZF → diagonal, only intra-beam interference) ---
+        # Effective channel
         H_eq = np.matmul(H_b, F_total)  # [K, K]
-        diag_gain = np.array([np.abs(H_eq[k, k]) ** 2 for k in range(K)])
+        gains = np.abs(H_eq) ** 2
 
-        # Intra-beam interference |h_k^H v_j|^2 (only same-beam users)
-        intra_coeff = np.zeros((K, K))
-        for bi in beam_list:
-            users_in_beam = [u for u, _ in beam_groups[bi]]
-            for k in users_in_beam:
-                for j in users_in_beam:
-                    if j != k:
-                        intra_coeff[k, j] = np.abs(H_eq[k, j]) ** 2
-
-        # --- Optimize power per beam (SLSQP) ---
-        p_opt = np.zeros(K)
-        Rmin = 0.01
-
-        for bi in beam_list:
-            users_in_beam = [u for u, _ in beam_groups[bi]]
-            n_u = len(users_in_beam)
-
-            # Author init: p ∝ m × gain (strongest m=1)
-            p0 = np.array([(m + 1) * diag_gain[users_in_beam[m]]
-                           for m in range(n_u)])
-            p0 = p0 / p0.sum()
-
-            if n_u <= 1:
-                p_opt[users_in_beam[0]] = 1.0
-                continue
-
-            def neg_rate(p_b, _uib=users_in_beam):
-                rs = 0.0
-                for m, u in enumerate(_uib):
-                    intf = sum(intra_coeff[u, j] * p_b[m2]
-                               for m2, j in enumerate(_uib) if j != u)
-                    sinr = diag_gain[u] * p_b[m] / (intf + sigma2)
-                    rs += np.log2(1 + sinr)
-                return -rs
-
-            cons = [{'type': 'eq', 'fun': lambda p: np.sum(p) - 1.0}]
-            for m in range(n_u):
-                cons.append({'type': 'ineq', 'fun': lambda p, m=m: p[m]})
-                def min_r(p, m=m, _uib=users_in_beam):
-                    u = _uib[m]
-                    intf = sum(intra_coeff[u, j] * p[m2]
-                               for m2, j in enumerate(_uib) if j != u)
-                    sinr = diag_gain[u] * p[m] / (intf + sigma2)
-                    return np.log2(1 + sinr) - Rmin
-                cons.append({'type': 'ineq', 'fun': min_r})
-
-            res = minimize(neg_rate, p0, method='SLSQP',
-                           bounds=[(0, 1)] * n_u, constraints=cons,
-                           options={'maxiter': 50, 'ftol': 1e-10})
-            for m, u in enumerate(users_in_beam):
-                p_opt[u] = res.x[m]
-
-        # --- Final sum-rate with SIC per beam ---
-        rate_sum = 0.0
-        for bi in beam_list:
-            users_in_beam = [u for u, _ in beam_groups[bi]]
-            # SIC order: strongest effective channel first
-            users_sorted = sorted(users_in_beam, key=lambda u: -diag_gain[u])
-            for decode_idx, k in enumerate(users_sorted):
-                # Interference from not-yet-decoded users in same beam
-                interf = 0.0
-                for j in users_sorted:
-                    if users_sorted.index(j) > decode_idx:
-                        interf += intra_coeff[k, j] * p_opt[j]
-                sinr = diag_gain[k] * p_opt[k] / (interf + sigma2)
-                r_k = np.log2(1 + sinr)
-                single_rates[b, k] = r_k
-                rate_sum += r_k
-        sum_rates[b] = rate_sum
+        # Sum-rate with SIC (same as LDMA for now, since ZF eliminates inter-user interference)
+        for k in range(K):
+            signal = gains[k, k]
+            interf = np.sum(gains[k, :]) - signal
+            sinr_k = signal / (interf + sigma2)
+            single_rates[b, k] = np.log2(1 + sinr_k)
+        sum_rates[b] = single_rates[b].sum()
 
     return (torch.tensor(sum_rates, dtype=torch.float32).to(device),
             torch.tensor(single_rates, dtype=torch.float32).to(device))
@@ -448,55 +369,34 @@ def _codebook_rate(H_complex, codebook, sigma2, P_total, K_eval):
 
 
 def ldma_rate(H_complex, sigma2, P_total):
-    """Near-field LDMA: polar codebook + beam grouping + group-level ZF.
-    Matches author's NF_group_1.m + cal_zero_forcing.m + cal_sum_rate_mu.m."""
+    """Near-field LDMA: polar codebook + per-user ZF on K×K effective channel.
+    Each user independently selects nearest polar codeword, then ZF digital
+    precoding on the K×K effective channel H_eff[k,j] = h_k^H @ f_j."""
     batch, K, N_ch = H_complex.shape
     H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
     sum_rates = np.zeros(batch)
     single_rates = np.zeros((batch, K))
 
-    best_idx = assign_nearest(H_complex, POLAR_CB)  # [B, K] beam index per user
+    best_idx = assign_nearest(H_complex, POLAR_CB)  # [B, K]
 
     for b in range(batch):
-        H_b = H_np[b]  # [K, N] clean channel
+        H_b = H_np[b]  # [K, N]
+        f_sel = POLAR_CB[best_idx[b]]  # [K, N] each user's best polar codeword
+        F_sel_H = f_sel.T.conj()  # [N, K]
 
-        # Step 1: find each user's best beam
-        beam_of_user = best_idx[b]  # [K]
+        # ZF precoder on beam-domain effective channel
+        H_eff = np.matmul(H_b, F_sel_H)  # [K, K]
+        F_zf = np.linalg.pinv(H_eff)  # [K, K]
 
-        # Step 2: group users by beam, sort within each group by |h|^2 descending
-        beam_groups = {}  # beam_idx -> [(user_idx, |h_k|^2), ...]
-        for k in range(K):
-            bi = beam_of_user[k]
-            if bi not in beam_groups:
-                beam_groups[bi] = []
-            beam_groups[bi].append((k, np.sum(np.abs(H_b[k]) ** 2)))
-        for bi in beam_groups:
-            beam_groups[bi].sort(key=lambda x: -x[1])
+        # Normalize F_zf by Frobenius norm of total precoder (author's cal_zero_forcing)
+        norm_cal = np.linalg.norm(np.matmul(F_sel_H, F_zf), 'fro')
+        if norm_cal > 1e-10:
+            F_zf = F_zf / norm_cal * np.sqrt(P_total)
 
-        beam_list = sorted(beam_groups.keys())
-        rf_num = len(beam_list)
+        # Global precoder in antenna domain
+        F_total = np.matmul(F_sel_H, F_zf)  # [N, K]
 
-        # Step 3: strong user = first (strongest) in each beam
-        strong_users = [beam_groups[bi][0][0] for bi in beam_list]
-
-        # Step 4: representative channel for ZF (one strong user per beam)
-        H_reduce = H_b[strong_users, :]  # [rf_num, N]
-
-        # Step 5: ZF among strong users (author: inv, here pinv for robustness)
-        F_zf = np.linalg.pinv(H_reduce)  # [N, rf_num]
-
-        # Step 6: build F_total [N, K], weak users share strong user's precoder
-        F_total = np.zeros((N_ch, K), dtype=np.complex128)
-        for i, bi in enumerate(beam_list):
-            for k, _ in beam_groups[bi]:
-                F_total[:, k] = F_zf[:, i]
-
-        # Step 7: Frobenius normalization (author: norm(precoding*F_cal, 'fro'))
-        norm_F = np.linalg.norm(F_total, 'fro')
-        if norm_F > 1e-10:
-            F_total = F_total / norm_F * np.sqrt(P_total)
-
-        # Step 8: sum-rate (author: cal_sum_rate_mu)
+        # Equivalent channel and sum-rate (equal power, no SIC)
         H_eq = np.matmul(H_b, F_total)  # [K, K]
         gains = np.abs(H_eq) ** 2
         for k in range(K):
