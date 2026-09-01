@@ -77,7 +77,7 @@ def build_polar_codebook(n_theta=60, n_r=60):
     return np.array(codebook)  # [M, N]
 
 
-def build_dft_codebook(n_dirs=128):
+def build_dft_codebook(n_dirs=N):
     """Far-field DFT codebook: a(theta) for theta in [-95°, 85°]."""
     thetas = np.linspace(-95, 85, n_dirs) * np.pi / 180
     codebook = []
@@ -314,15 +314,113 @@ def _codebook_rate(H_complex, codebook, sigma2, P_total, K_eval):
 
 
 def ldma_rate(H_complex, sigma2, P_total):
-    """Near-field LDMA: polar-domain codebook beamforming + equal power."""
-    return _codebook_rate(H_complex, POLAR_CB, sigma2, P_total, H_complex.shape[1])
+    """Near-field LDMA: polar codebook + beam grouping + group-level ZF.
+    Matches author's NF_group_1.m + cal_zero_forcing.m + cal_sum_rate_mu.m."""
+    batch, K, N_ch = H_complex.shape
+    H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
+    sum_rates = np.zeros(batch)
+    single_rates = np.zeros((batch, K))
+
+    best_idx = assign_nearest(H_complex, POLAR_CB)  # [B, K] beam index per user
+
+    for b in range(batch):
+        H_b = H_np[b]  # [K, N] clean channel
+
+        # Step 1: find each user's best beam
+        beam_of_user = best_idx[b]  # [K]
+
+        # Step 2: group users by beam, sort within each group by |h|^2 descending
+        beam_groups = {}  # beam_idx -> [(user_idx, |h_k|^2), ...]
+        for k in range(K):
+            bi = beam_of_user[k]
+            if bi not in beam_groups:
+                beam_groups[bi] = []
+            beam_groups[bi].append((k, np.sum(np.abs(H_b[k]) ** 2)))
+        for bi in beam_groups:
+            beam_groups[bi].sort(key=lambda x: -x[1])
+
+        beam_list = sorted(beam_groups.keys())
+        rf_num = len(beam_list)
+
+        # Step 3: strong user = first (strongest) in each beam
+        strong_users = [beam_groups[bi][0][0] for bi in beam_list]
+
+        # Step 4: representative channel for ZF (one strong user per beam)
+        H_reduce = H_b[strong_users, :]  # [rf_num, N]
+
+        # Step 5: ZF among strong users (author: inv, here pinv for robustness)
+        F_zf = np.linalg.pinv(H_reduce)  # [N, rf_num]
+
+        # Step 6: build F_total [N, K], weak users share strong user's precoder
+        F_total = np.zeros((N_ch, K), dtype=np.complex128)
+        for i, bi in enumerate(beam_list):
+            for k, _ in beam_groups[bi]:
+                F_total[:, k] = F_zf[:, i]
+
+        # Step 7: Frobenius normalization (author: norm(precoding*F_cal, 'fro'))
+        norm_F = np.linalg.norm(F_total, 'fro')
+        if norm_F > 1e-10:
+            F_total = F_total / norm_F * np.sqrt(P_total)
+
+        # Step 8: sum-rate (author: cal_sum_rate_mu)
+        H_eq = np.matmul(H_b, F_total)  # [K, K]
+        gains = np.abs(H_eq) ** 2
+        for k in range(K):
+            signal = gains[k, k]
+            interf = np.sum(gains[k, :]) - signal
+            sinr_k = signal / (interf + sigma2)
+            single_rates[b, k] = np.log2(1 + sinr_k)
+        sum_rates[b] = single_rates[b].sum()
+
+    return (torch.tensor(sum_rates, dtype=torch.float32).to(device),
+            torch.tensor(single_rates, dtype=torch.float32).to(device))
 
 
 # ===================== 4. FF-SDMA (DFT codebook beamforming) =====================#
 
 def sdma_rate(H_complex, sigma2, P_total):
-    """Far-field SDMA: DFT codebook beamforming + equal power."""
-    return _codebook_rate(H_complex, DFT_CB, sigma2, P_total, H_complex.shape[1])
+    """Far-field SDMA: DFT codebook + beam selection + ZF + Frobenius norm.
+    Matches author's select_beam_far.m + cal_zero_forcing.m + cal_sum_rate_mu.m."""
+    batch, K, N_ch = H_complex.shape
+    H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
+    sum_rates = np.zeros(batch)
+    single_rates = np.zeros((batch, K))
+
+    best_idx = assign_nearest(H_complex, DFT_CB)  # [B, K]
+
+    for b in range(batch):
+        H_b = H_np[b]  # [K, N]
+        f_sel = DFT_CB[best_idx[b]]  # [K, N] selected codewords
+        F_sel_H = f_sel.T.conj()  # [N, K]
+
+        # Effective K×K channel: H_eff[k,j] = h_k^H @ f_j
+        H_eff = np.matmul(H_b, F_sel_H)  # [K, K]
+
+        # ZF precoder (author: pinv(H_effect))
+        F_zf = np.linalg.pinv(H_eff)  # [K, K]
+
+        # Global precoder in antenna domain (author: precoding * F_cal)
+        F_total = np.matmul(F_sel_H, F_zf)  # [N, K]
+
+        # Frobenius normalization (author: F_cal = F_cal/norm(precoding*F_cal, 'fro'))
+        norm_F = np.linalg.norm(F_total, 'fro')
+        if norm_F > 1e-10:
+            F_total = F_total / norm_F * np.sqrt(P_total)
+
+        # Equivalent channel: H_eq = H @ F_total  [K, K]
+        H_eq = np.matmul(H_b, F_total)  # [K, K]
+
+        # Sum-rate (author: cal_sum_rate_mu)
+        gains = np.abs(H_eq) ** 2
+        for k in range(K):
+            signal = gains[k, k]
+            interf = np.sum(gains[k, :]) - signal
+            sinr_k = signal / (interf + sigma2)
+            single_rates[b, k] = np.log2(1 + sinr_k)
+        sum_rates[b] = single_rates[b].sum()
+
+    return (torch.tensor(sum_rates, dtype=torch.float32).to(device),
+            torch.tensor(single_rates, dtype=torch.float32).to(device))
 
 
 # ===================== Unified eval function =====================#
