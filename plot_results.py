@@ -4,10 +4,10 @@ No fallback, no hard-coded paper values. Data missing → skip with warning.
 
 Fig.5: Training curves (from train_log.csv)
 Fig.6: Rate vs K (from eval_gpt2_results.json + eval_cnn_results.json + eval_baselines_results.json)
+Fig.7: Rate vs alpha_N (from eval_baselines_results.json; GPT2/CNN need gamma sweep)
+Fig.8: Rate vs Rmin (from eval_baselines_results.json; GPT2/CNN need Rmin sweep)
 Fig.9: Rate vs P (from eval_gpt2_results.json + eval_cnn_results.json + eval_baselines_results.json)
 Table I: Accuracy vs SNR (from eval_gpt2_results.json + eval_cnn_results.json)
-
-Fig.7/8 require separate gamma/Rmin training sweeps — not generated here.
 """
 import os, glob, json, sys
 import numpy as np
@@ -170,6 +170,62 @@ def plot_rate_vs_power():
     plt.close()
 
 
+# ==================== Figure 7: Rate vs alpha_N ====================
+def plot_rate_vs_alpha():
+    bl = load_json('eval_baselines_results.json')
+    if not bl or 'fig7' not in bl:
+        print('  [SKIP] Baselines data unavailable for Fig.7')
+        return
+
+    alphas = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    markers = {'Capacity': 's', 'Proposed': '^', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
+    colors = {'Capacity': 'm', 'Proposed': 'b', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    for name in ['Capacity', 'NF-NOMA', 'LDMA', 'SDMA']:
+        vals = [bl['fig7'][str(a)][name] for a in alphas]
+        ax.plot(alphas, vals, marker=markers[name], color=colors[name], label=name, linewidth=1.6, markersize=8)
+
+    ax.set_xlabel(r'$\alpha_N$')
+    ax.set_ylabel('Spectrum Efficiency (bps/Hz)')
+    ax.set_title(r'Spectrum Efficiency vs $\alpha_N$')
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    save_path = os.path.join(fig_dir, 'Fig7_rate_vs_alpha.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f'Saved: {save_path}')
+    plt.close()
+
+
+# ==================== Figure 8: Rate vs Rmin ====================
+def plot_rate_vs_Rmin():
+    bl = load_json('eval_baselines_results.json')
+    if not bl or 'fig8' not in bl:
+        print('  [SKIP] Baselines data unavailable for Fig.8')
+        return
+
+    rmins = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    markers = {'Capacity': 's', 'Proposed': '^', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
+    colors = {'Capacity': 'm', 'Proposed': 'b', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    for name in ['Capacity', 'NF-NOMA', 'LDMA', 'SDMA']:
+        vals = [bl['fig8'][str(r)][name] for r in rmins]
+        ax.plot(rmins, vals, marker=markers[name], color=colors[name], label=name, linewidth=1.6, markersize=8)
+
+    ax.set_xlabel(r'$R_{\min}$ (bps/Hz)')
+    ax.set_ylabel('Spectrum Efficiency (bps/Hz)')
+    ax.set_title(r'Spectrum Efficiency vs $R_{\min}$')
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    save_path = os.path.join(fig_dir, 'Fig8_rate_vs_Rmin.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f'Saved: {save_path}')
+    plt.close()
+
+
 # ==================== Save Tables ====================
 def save_tables():
     gpt2_data = load_json('eval_gpt2_results.json')
@@ -236,6 +292,9 @@ if __name__ == '__main__':
     plot_rate_vs_K()
     print('Plotting rate vs power (Fig.9)...')
     plot_rate_vs_power()
+    print('Plotting rate vs alpha_N (Fig.7)...')
+    plot_rate_vs_alpha()
+    print('Plotting rate vs Rmin (Fig.8)...')
+    plot_rate_vs_Rmin()
     save_tables()
     print(f'\nAll figures saved to: {fig_dir}')
-    print('Note: Fig.7 (alpha_N) and Fig.8 (Rmin) require separate training sweeps.')
