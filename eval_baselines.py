@@ -23,6 +23,7 @@ base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\o
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--quick', action='store_true', help='Skip Rmin/alpha sweeps')
+parser.add_argument('--matlab', action='store_true', help='Use MATLAB NOMA (author fmincon+WMMSE)')
 args = parser.parse_args()
 
 
@@ -58,32 +59,50 @@ def load_test_set(use_raw=False):
 
 # ===================== Codebook helpers =====================#
 
-def build_polar_codebook(n_theta=60, n_r=60):
-    """Near-field polar-domain codebook matching paper's geometry.
-    hB=15m, tilt=5°, x∈[0,200], h∈[0,30]
-    θ = atan2(h-hB, x) - tilt → range ≈ [-95°, 85°]
-    r = sqrt(x² + (h-hB)²) → range ≈ [15m, 201m]
+def build_polar_codebook():
+    """Near-field polar-domain codebook matching author's QuaCode.m.
+    Uses Fresnel-zone-based non-uniform distance sampling and uniform sin(theta) grid.
     """
-    thetas = np.linspace(-95, 85, n_theta) * np.pi / 180
-    rs = np.linspace(15, 201, n_r)
+    d = lambda_ / 2  # antenna spacing
+    fc = 3e8 / lambda_  # carrier frequency
+    rho_min = 4
+    delta = 1.8
+
+    # Angle grid: uniform in sin(theta), matching author's QuaCode
+    sin_theta_list = -1 + 2/N + np.arange(N-2) * (2/N)  # N-2 directions
+    D = len(sin_theta_list)
+
+    # Distance grid: Fresnel-zone-based non-uniform sampling
+    Z_delta = (N * d) ** 2 / 2 / lambda_ / delta ** 2
+    S = int(np.floor(Z_delta / rho_min)) + 1
+    r_list = np.zeros(S)
+    r_list[0] = 200 * N**2 * d**2 / lambda_
+    for s in range(1, S):
+        r_list[s] = Z_delta / s
+
+    # Build codebook: polar_domain_manifold for each (sin_theta, r)
     codebook = []
-    for theta in thetas:
-        for r in rs:
-            n = np.arange(N)
-            x_n = (n - (N - 1) / 2) * lambda_ / 2
-            r_n = np.sqrt(r ** 2 + x_n ** 2 - 2 * r * x_n * np.sin(theta))
-            b = np.exp(-1j * 2 * np.pi * (r_n - r) / lambda_) / np.sqrt(N)
-            codebook.append(b)
+    for s in range(S):
+        for idx in range(D):
+            sin_theta = sin_theta_list[idx]
+            r = r_list[s] * (1 - sin_theta**2)
+            theta = np.arcsin(sin_theta)
+            # Polar domain manifold (author's approximation)
+            nn = np.arange(-(N-1)//2, (N-1)//2 + 1)
+            r_n = r - nn * d * np.sin(theta) + nn**2 * d**2 * np.cos(theta)**2 / (2 * r)
+            at = np.exp(-1j * 2 * np.pi * fc * (r_n - r) / 3e8) / np.sqrt(N)
+            codebook.append(at)
+
     return np.array(codebook)  # [M, N]
 
 
 def build_dft_codebook(n_dirs=N):
-    """Far-field DFT codebook: a(theta) for theta in [-95°, 85°]."""
-    thetas = np.linspace(-95, 85, n_dirs) * np.pi / 180
+    """Far-field DFT codebook: a(theta) for uniform sin(theta) grid."""
+    sin_thetas = -1 + 2/N + np.arange(n_dirs) * (2/n_dirs)
     codebook = []
-    for theta in thetas:
+    for st in sin_thetas:
         n = np.arange(N)
-        a = np.exp(1j * np.pi * n * np.sin(theta)) / np.sqrt(N)
+        a = np.exp(1j * np.pi * n * st) / np.sqrt(N)
         codebook.append(a)
     return np.array(codebook)  # [M, N]
 
@@ -329,6 +348,45 @@ def noma_rate(H_complex, sigma2, P_total):
             torch.tensor(single_rates, dtype=torch.float32).to(device))
 
 
+# ===================== 2b. NF-NOMA via MATLAB (author's fmincon+WMMSE) =====================#
+
+_matlab_noma_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'matlab_noma')
+_matlab_input = os.path.join(_matlab_noma_dir, '_input.mat')
+_matlab_output = os.path.join(_matlab_noma_dir, '_output.mat')
+
+
+def noma_rate_matlab(H_complex, sigma2, P_total):
+    """NF-NOMA using author's MATLAB code (fmincon + WMMSE power optimization)."""
+    import scipy.io as sio
+    import subprocess
+
+    batch, K, _ = H_complex.shape
+    H_np = H_complex.detach().cpu().numpy().astype(np.complex128)
+
+    # Export to .mat (MATLAB expects [B, K, N])
+    sio.savemat(_matlab_input, {
+        'H_batch': H_np,
+        'sigma2': float(sigma2),
+        'P_total': float(P_total),
+    })
+
+    # Call MATLAB
+    matlab_exe = r"C:\Program Files\MATLAB\R2024a\bin\matlab.exe"
+    cmd = f'"{matlab_exe}" -batch "cd(\'{_matlab_noma_dir.replace(chr(92), "/")}\'); run_noma_batch(\'{_matlab_input.replace(chr(92), "/")}\', \'{_matlab_output.replace(chr(92), "/")}\')"'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        print(f"  [MATLAB ERROR] {result.stderr[-500:]}")
+        raise RuntimeError("MATLAB NOMA failed")
+
+    # Read results
+    out = sio.loadmat(_matlab_output)
+    sum_rates = out['sum_rates'].flatten()
+    single_rates = out['single_rates']
+
+    return (torch.tensor(sum_rates, dtype=torch.float32).to(device),
+            torch.tensor(single_rates, dtype=torch.float32).to(device))
+
+
 # ===================== 3. NF-LDMA (polar codebook beamforming) =====================#
 
 def _codebook_rate(H_complex, codebook, sigma2, P_total, K_eval):
@@ -554,9 +612,10 @@ def main():
         test_loader = load_test_set(use_raw=False)
         print(f"Test set: {len(test_loader.dataset)} samples (normalized channels)")
 
+    noma_fn = noma_rate_matlab if args.matlab else noma_rate
     baselines = {
         'Capacity': dpc_rate,
-        'NF-NOMA': noma_rate,
+        'NF-NOMA': noma_fn,
         'LDMA': ldma_rate,
         'SDMA': sdma_rate,
     }
