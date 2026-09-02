@@ -112,13 +112,10 @@ def eval_snr(model, loader, snr_db):
             cl = data['cl'].to(device, non_blocking=True)
             H_re = rearrange(H, 'n k W H -> n H W k', H=2)
             H_sliced = H_re[:, :, :, :K]
-            original_noise = model.noise
-            model.noise = lambda h, s: h
             sigma_ext = 10 ** (-snr_db / 10)
             noise = torch.sqrt(torch.tensor(sigma_ext / 2.0)) * torch.randn_like(H_sliced)
             noise = noise * torch.sqrt(torch.mean(torch.abs(H_sliced) ** 2))
             H_sliced = H_sliced + noise
-            model.noise = original_noise
             H0 = torch.zeros(H_re.shape, device=device)
             H0[:, :, :, :K] = H_sliced
             mean = torch.mean(H_sliced)

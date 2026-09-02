@@ -119,8 +119,6 @@ def eval_snr(model, loader, snr_db):
             H = data['H'].to(device, non_blocking=True)
             cl = data['cl'].to(device, non_blocking=True)
             H = rearrange(H, 'n W H a -> n W (H a)')
-            original_noise = model.noise
-            model.noise = lambda h, s: h
             H_4d = H.reshape(*H.shape[:-1], H.shape[-1] // 2, 2)
             H_complex = torch.complex(H_4d[..., 0], H_4d[..., 1])
             P_signal = torch.mean(torch.abs(H_complex) ** 2).item()
@@ -128,8 +126,9 @@ def eval_snr(model, loader, snr_db):
             n_complex = (torch.randn_like(H_complex) + 1j * torch.randn_like(H_complex)) * (noise_power / 2.0) ** 0.5
             noise = torch.stack([n_complex.real, n_complex.imag], dim=-1).reshape_as(H)
             H = H + noise
-            p_hat, lamda_hat, cl_hat = model(H, cl)
-            model.noise = original_noise
+            mean = torch.mean(H)
+            std = torch.std(H)
+            p_hat, lamda_hat, cl_hat = model(H, cl, mean, std)
             r = criterion_rate(p_hat, lamda_hat, H).item()
             a = criterion_acc(cl, torch.unsqueeze(cl_hat, dim=2)).item()
             rates.append(r)

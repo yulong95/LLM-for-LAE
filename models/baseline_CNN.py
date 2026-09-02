@@ -27,10 +27,6 @@ class CNN_pre(nn.Module):
 
     def forward(self, x,cl,index,mean,std):
         x = (x - mean) / std
-        B, L, enc_in,w= x.shape
-        for i in range(B):
-            SNR = torch.tensor(30.0)
-            x[i, ...] = self.noise(x[i, ...], SNR)
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
         x = x.view(-1, 12*self.N*self.K)

@@ -67,14 +67,12 @@ class Gpt2Model(nn.Module):
         add_noise = add_noise * torch.sqrt(torch.mean(torch.abs(H) ** 2))
         return H + add_noise
     
-    def forward(self, H=None,cl=None):
-        mean = torch.mean(H)
-        std = torch.std(H)
+    def forward(self, H=None, cl=None, mean=None, std=None):
+        if mean is None:
+            mean = torch.mean(H)
+        if std is None:
+            std = torch.std(H)
         muchannel = (H - mean) / std
-        B, L, enc_in = H.shape
-        for i in range(B):
-            SNR = torch.tensor(0.0)
-            muchannel[i, ...] = self.noise(muchannel[i, ...], SNR)
         muchannel = self.transformer_mu(muchannel)
         input_embs = self.llama_proj(muchannel)
         input_atts = torch.ones(input_embs.size()[:-1], dtype=torch.long).to(muchannel.device)
