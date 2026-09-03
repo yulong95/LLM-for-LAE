@@ -19,7 +19,7 @@ N, K = 256, 10
 
 # ============= Args =============#
 parser = argparse.ArgumentParser()
-parser.add_argument('--gamma', type=float, default=0.8, help='Near-field power ratio constraint')
+parser.add_argument('--gamma', type=float, default=0.4, help='Near-field power ratio constraint (alpha_c). Paper Fig.6/8/9 uses 0.4')
 parser.add_argument('--gamma2', type=float, default=5.0, help='Classification loss weight')
 parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--lr', type=float, default=0.0001)
@@ -30,9 +30,11 @@ args = parser.parse_args()
 data_root = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\Data_user.mat"
 base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output"
 
-# Output dir naming
-if args.gamma != 0.8:
+# Output dir naming (paper default: gamma=0.4, gamma2=5.0)
+if args.gamma != 0.4:
     dir_tag = f"CNN_gamma{args.gamma:.1f}"
+elif args.gamma2 != 5.0:
+    dir_tag = f"CNN_gamma2_{args.gamma2}"
 else:
     dir_tag = "CNN"
 output_dir = os.path.join(base_output, f"{dir_tag}_{datetime.datetime.now().strftime('%m.%d_%H-%M-%S')}")

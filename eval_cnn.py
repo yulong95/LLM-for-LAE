@@ -21,14 +21,14 @@ base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\o
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--quick', action='store_true', help='Skip timing measurement')
-parser.add_argument('--gamma', type=float, default=0.8,
-                    help='alpha_c constraint (must match training gamma). CNN default: 0.8')
+parser.add_argument('--gamma', type=float, default=0.4,
+                    help='alpha_c constraint (must match training gamma). Paper Fig.6/8/9 uses 0.4')
 args = parser.parse_args()
 
 
 # ===================== Model loading =====================#
-def find_latest_run(gamma=0.8):
-    if gamma == 0.8:
+def find_latest_run(gamma=0.4):
+    if gamma == 0.4:
         runs = sorted(glob.glob(os.path.join(base_output, "CNN_*")))
         valid = [r for r in runs
                  if glob.glob(os.path.join(r, '*.pth'))
@@ -44,7 +44,7 @@ def find_latest_run(gamma=0.8):
     return valid[-1]
 
 
-def build_model(run_dir=None, gamma=0.8):
+def build_model(run_dir=None, gamma=0.4):
     if run_dir is None:
         run_dir = find_latest_run(gamma)
     model = CNN_pre(N, K, gamma=gamma)

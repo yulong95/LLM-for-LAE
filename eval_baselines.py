@@ -187,7 +187,7 @@ def dpc_rate(H_complex, sigma2, P_total):
         G = H_b @ H_b.conj().T  # [K, K] Gram
 
         P_alloc = np.zeros(K)
-        n_steps = 500
+        n_steps = 100  # Reduced from 500 for faster evaluation
         delta = P_total / n_steps
 
         # Precompute effective gains for all users
@@ -513,6 +513,10 @@ def eval_baseline(loader, rate_fn, K_eval=None, sigma2=None, P_total=1.0):
 
 
 def eval_baseline_with_penalty(loader, rate_fn, K_eval=None, sigma2=None, P_total=1.0, rmin=0.0):
+    """
+    Baselines have NO Rmin constraint, so they return constant rate (horizontal line).
+    The rmin parameter is ignored for baselines per paper Fig.8.
+    """
     if sigma2 is None:
         sigma2 = 10 ** (-20 / 10)
     if K_eval is None:
@@ -522,10 +526,8 @@ def eval_baseline_with_penalty(loader, rate_fn, K_eval=None, sigma2=None, P_tota
         for data in loader:
             H_complex = _extract_H(data, K_eval)
             Rsum, single_rate = rate_fn(H_complex, sigma2, P_total)
-            penalty = F.relu(torch.tensor(rmin) - single_rate) * 10.0
-            penalty = torch.sum(penalty, dim=1)
-            adjusted = torch.mean(Rsum) - torch.mean(penalty)
-            rates.append(adjusted.item())
+            # No penalty for baselines - they have no Rmin constraint
+            rates.append(torch.mean(Rsum).item())
     return np.mean(rates)
 
 
