@@ -25,7 +25,13 @@ class CNN_pre(nn.Module):
         add_noise = add_noise * torch.sqrt(torch.mean(torch.abs(H) ** 2))
         return H + add_noise
 
-    def forward(self, x,cl,index,mean,std):
+    def forward(self, x,cl,index,mean,std,use_pred_cl_for_c3=False):
+        """Forward pass.
+
+        use_pred_cl_for_c3:
+            False (default): C3 uses ground-truth cl.
+            True (diagnostic): C3 uses binarized cl_hat from this forward pass.
+        """
         x = (x - mean) / std
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
@@ -35,37 +41,36 @@ class CNN_pre(nn.Module):
 
         cl = cl.squeeze(-1)
         p_hat = x[:,:index,0]
+        lamda_hat = x[:,:index,1]
+        cl_hat = x[:,:index,2]
+        cl_c3 = ((cl_hat >= 0.5).float() if use_pred_cl_for_c3 else cl)
+
         p_sum = torch.norm(p_hat,p=2,dim=1, keepdim=True)**2
         p_normalized = p_hat/torch.sqrt(p_sum+ 1e-8)
-        temp_label_0 = torch.norm(p_normalized * cl,p=2,dim=1, keepdim=True)**2
+        temp_label_0 = torch.norm(p_normalized * cl_c3,p=2,dim=1, keepdim=True)**2
         mask0 = temp_label_0 < self.gamma
 
-        norm_label_1 = torch.norm(p_hat * cl,p=2,dim=1, keepdim=True)**2
+        norm_label_1 = torch.norm(p_hat * cl_c3,p=2,dim=1, keepdim=True)**2
         scale_1 = torch.sqrt(self.P_max * self.gamma /(norm_label_1 + 1e-8) )
-        normalized_label_1 = p_hat * cl * scale_1
-        norm_label_0 = torch.norm(p_hat * (1-cl),p=2,dim=1, keepdim=True)**2
+        normalized_label_1 = p_hat * cl_c3 * scale_1
+        norm_label_0 = torch.norm(p_hat * (1-cl_c3),p=2,dim=1, keepdim=True)**2
         scale_0 = torch.sqrt(self.P_max * (1-self.gamma) /(norm_label_0 + 1e-8) )
-        normalized_label_0 = p_hat * (1 - cl) * scale_0
+        normalized_label_0 = p_hat * (1 - cl_c3) * scale_0
         p_hat_0 = normalized_label_1+normalized_label_0
         p_hat_0 = mask0 * p_normalized  + (~mask0) * p_hat_0
 
-
-        lamda_hat = x[:,:index,1]
         lamda_sum = torch.sum(lamda_hat, dim=1, keepdim=True)
-        lamda_normalized = lamda_hat/ (lamda_sum+ 1e-8) 
-        temp_label_1 = torch.sum(lamda_normalized * cl,dim=1, keepdim=True)
+        lamda_normalized = lamda_hat/ (lamda_sum+ 1e-8)
+        temp_label_1 = torch.sum(lamda_normalized * cl_c3,dim=1, keepdim=True)
         mask1 = temp_label_1 < self.gamma
 
-        sum_label_1 = torch.sum(lamda_hat * cl, dim=1, keepdim=True)
-        scale_p_1 = self.P_max * self.gamma /(sum_label_1 + 1e-8) 
-        normalized_P_label_1 = lamda_hat * cl * scale_p_1
-        sum_label_0 = torch.sum(lamda_hat * (1 - cl), dim=1, keepdim=True)
-        scale_p_0 = self.P_max * (1-self.gamma) /(sum_label_0 + 1e-8) 
-        normalized_P_label_0 = lamda_hat * (1 - cl) * scale_p_0
+        sum_label_1 = torch.sum(lamda_hat * cl_c3, dim=1, keepdim=True)
+        scale_p_1 = self.P_max * self.gamma /(sum_label_1 + 1e-8)
+        normalized_P_label_1 = lamda_hat * cl_c3 * scale_p_1
+        sum_label_0 = torch.sum(lamda_hat * (1 - cl_c3), dim=1, keepdim=True)
+        scale_p_0 = self.P_max * (1-self.gamma) /(sum_label_0 + 1e-8)
+        normalized_P_label_0 = lamda_hat * (1 - cl_c3) * scale_p_0
         lamda_hat_0 = normalized_P_label_1+normalized_P_label_0
         lamda_hat_0 = mask1 * lamda_normalized + (~mask1) * lamda_hat_0
-
-        cl_hat = x[:,:index,2]
-
 
         return p_hat_0,lamda_hat_0,cl_hat

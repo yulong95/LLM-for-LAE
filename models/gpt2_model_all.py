@@ -67,7 +67,13 @@ class Gpt2Model(nn.Module):
         add_noise = add_noise * torch.sqrt(torch.mean(torch.abs(H) ** 2))
         return H + add_noise
     
-    def forward(self, H=None, cl=None, mean=None, std=None):
+    def forward(self, H=None, cl=None, mean=None, std=None, use_pred_cl_for_c3=False):
+        """Forward pass.
+
+        use_pred_cl_for_c3:
+            False (default): C3 power projection uses ground-truth cl (train + paper-style eval as currently implemented).
+            True (diagnostic): C3 uses binarized cl_hat from this forward pass.
+        """
         if mean is None:
             mean = torch.mean(H)
         if std is None:
@@ -77,52 +83,53 @@ class Gpt2Model(nn.Module):
         input_embs = self.llama_proj(muchannel)
         input_atts = torch.ones(input_embs.size()[:-1], dtype=torch.long).to(muchannel.device)
 
-        last_hidden_state = self.gpt2_model(input_ids=None, inputs_embeds=input_embs,attention_mask=input_atts).last_hidden_state 
+        last_hidden_state = self.gpt2_model(input_ids=None, inputs_embeds=input_embs,attention_mask=input_atts).last_hidden_state
 
         dec_out = self.precoding_out_layer(last_hidden_state)
         dec_out = self.output_layer(dec_out)
         cl = cl.squeeze(-1)
-        
+
         p_hat = dec_out[:,:,0]
+        lamda_hat = dec_out[:,:,1]
+        cl_hat = dec_out[:,:,2]
+        cl_c3 = ((cl_hat >= 0.5).float() if use_pred_cl_for_c3 else cl)
+
         p_sum = torch.norm(p_hat,p=2,dim=1, keepdim=True)**2
         p_normalized = p_hat/torch.sqrt(p_sum+ 1e-8)
         # mask0: True when alpha_N (near-field power ratio) < gamma (alpha_c)
         #   → Constraint satisfied, keep original normalized output
         # mask0: False when alpha_N >= gamma
         #   → Project/scale to constraint boundary: set P_near = gamma * P_max
-        temp_label_0 = torch.norm(p_normalized * cl,p=2,dim=1, keepdim=True)**2
+        temp_label_0 = torch.norm(p_normalized * cl_c3,p=2,dim=1, keepdim=True)**2
         mask0 = temp_label_0 < self.gamma
 
         # When mask0=False (alpha_N >= gamma): project to boundary
         # P_near = gamma * P_max, P_far = (1-gamma) * P_max
-        norm_label_1 = torch.norm(p_hat * cl,p=2,dim=1, keepdim=True)**2
+        norm_label_1 = torch.norm(p_hat * cl_c3,p=2,dim=1, keepdim=True)**2
         scale_1 = torch.sqrt(self.P_max * self.gamma /(norm_label_1 + 1e-8) )
-        normalized_label_1 = p_hat * cl * scale_1
-        norm_label_0 = torch.norm(p_hat * (1-cl),p=2,dim=1, keepdim=True)**2
+        normalized_label_1 = p_hat * cl_c3 * scale_1
+        norm_label_0 = torch.norm(p_hat * (1-cl_c3),p=2,dim=1, keepdim=True)**2
         scale_0 = torch.sqrt(self.P_max * (1-self.gamma) /(norm_label_0 + 1e-8) )
-        normalized_label_0 = p_hat * (1 - cl) * scale_0
+        normalized_label_0 = p_hat * (1 - cl_c3) * scale_0
         p_hat_0 = normalized_label_1+normalized_label_0
         p_hat_0 = mask0 * p_normalized  + (~mask0) * p_hat_0
 
-
-        lamda_hat = dec_out[:,:,1]
         lamda_sum = torch.sum(lamda_hat, dim=1, keepdim=True)
         lamda_normalized = lamda_hat/ (lamda_sum+ 1e-8)
         # Same constraint as p_hat: alpha_N_lamda <= gamma
         # mask1: True → keep original; False → project to boundary (alpha_N_lamda = gamma)
-        temp_label_1 = torch.sum(lamda_normalized * cl,dim=1, keepdim=True)
+        temp_label_1 = torch.sum(lamda_normalized * cl_c3,dim=1, keepdim=True)
         mask1 = temp_label_1 < self.gamma
 
-        sum_label_1 = torch.sum(lamda_hat * cl, dim=1, keepdim=True)
+        sum_label_1 = torch.sum(lamda_hat * cl_c3, dim=1, keepdim=True)
         scale_p_1 = self.P_max * self.gamma /(sum_label_1 + 1e-8)
-        normalized_P_label_1 = lamda_hat * cl * scale_p_1
-        sum_label_0 = torch.sum(lamda_hat * (1 - cl), dim=1, keepdim=True)
+        normalized_P_label_1 = lamda_hat * cl_c3 * scale_p_1
+        sum_label_0 = torch.sum(lamda_hat * (1 - cl_c3), dim=1, keepdim=True)
         scale_p_0 = self.P_max * (1-self.gamma) /(sum_label_0 + 1e-8)
-        normalized_P_label_0 = lamda_hat * (1 - cl) * scale_p_0
+        normalized_P_label_0 = lamda_hat * (1 - cl_c3) * scale_p_0
         lamda_hat_0 = normalized_P_label_1+normalized_P_label_0
         lamda_hat_0 = mask1 * lamda_normalized + (~mask1) * lamda_hat_0
 
-        cl_hat = dec_out[:,:,2]
         return p_hat_0,lamda_hat_0,cl_hat
 
 class FeedForward(nn.Module):
