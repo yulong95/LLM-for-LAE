@@ -283,6 +283,56 @@ figures/training_curves.png
 
 ---
 
+## Fig.6~9 图形审查（2026-09-20）
+
+对照论文图 + 作者 `refs/Data.xlsx` + 当前 JSON。
+
+| 图 | 约束 | 结论 |
+| -- | ---- | ---- |
+| Fig.6 | 随K上升；Capacity最高；NOMA>LDMA>SDMA | 🟡 形态正确 |
+| Fig.7 | Baseline水平线；GPT2/CNN随α上升 | 🟡 Baseline正确，GPT2/CNN间隙过小 |
+| Fig.8 | Baseline水平线；GPT2/CNN随Rmin下降 | ❌ GPT2/CNN近水平，未完成 |
+| Fig.9 | 随P上升；Capacity最高 | 🟡 形态正确 |
+
+### 详细问题
+
+1. **GPT2 与 CNN 几乎重合（Fig.6/7/8/9）**
+   - 论文中 Proposed 明显高于 CNN（K=10 约 0.5 bps/Hz）
+   - 当前差距仅约 0.05~0.06，部分点 CNN 反超：
+     - Fig.6 K=5~8：GPT2−CNN = −0.14 ~ −0.01
+     - Fig.9 P≥6：GPT2−CNN ≈ −0.02
+   - `⚠️` 非绘图 bug，是当前模型性能差异过小
+
+2. **Fig.8 GPT2/CNN 几乎水平**
+   - Rmin 0→1 仅下降约 0.01，论文 Proposed 约下降 0.6
+   - 原因：仅有 rmin=0.6 模型，推理时改阈值无效
+   - Baseline 水平线 ✅ 符合绝对约束
+
+3. **Baseline 数值偏低（已知，不改算法）**
+   - K=10：NOMA 23.81 vs 论文 26.68；LDMA 23.38 vs 25.02；SDMA 20.80 vs 23.47
+   - Capacity 32.25 vs 32.65（可接受）
+
+4. **Checkpoint 选取风险（已修代码，`⚠️ 当前JSON未重跑`）**
+   - 旧 `eval_fig7/8.py` 在过滤 `gamma` 后会命中 `GPT2_rmin0.0`
+   - 已改为优先论文默认 run（无 gamma/rmin 标签）
+   - 现有 `eval_fig7_results.json` / `eval_fig8_results.json` 仍可能是旧模型结果
+
+5. **Fig.7 坐标标签**
+   - 论文横轴写作 α_N
+   - 本项目横轴为约束 α_c（更准确）；已补充标签说明
+   - 实际 α_N 已在 JSON 中记录，α_c=0.4 时 α_N≈0.34
+
+6. **Transformer**
+   - 论文 Fig.6~9 有 Transformer 曲线，当前未实现，图例缺失属预期
+
+### 图形绘制本身
+
+- 无空图、无坐标轴颠倒、无 baseline 误加 Rmin 惩罚
+- Fig.6/9 曲线单调性与排序正确
+- 主要“看起来有问题”的是：GPT2/CNN 叠线、Fig.8 过平
+
+---
+
 ## 状态标记说明
 
 - ✅ 已完成并验证

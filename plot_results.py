@@ -310,7 +310,7 @@ def plot_rate_vs_alpha():
         rates = [fig7_data['cnn_fig7'][g]['rate'] for g in gamma_vals]
         ax.plot(alphas, rates, marker='d', color='c', linestyle='--', label='CNN', linewidth=1.5, markersize=10)
 
-    ax.set_xlabel(r'$\alpha_c$')
+    ax.set_xlabel(r'$\alpha_c$ (max near-field power ratio)')
     ax.set_ylabel('Spectrum Efficiency (bps/Hz)')
     ax.set_title(r'Spectrum Efficiency vs $\alpha_c$')
     ax.legend(fontsize=9)

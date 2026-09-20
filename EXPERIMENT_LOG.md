@@ -203,7 +203,32 @@ Paper = 26.68
 
 ---
 
-## Fig.4 波束增益
+## Fig.6~9 图形审查（2026-09-20）
+
+检查项：
+
+- 论文原图形态
+- 作者 Data.xlsx 数值
+- 绝对约束：Fig.7/8 Baseline 必须水平线
+
+结论：
+
+- 绘图逻辑无空图/坐标错误
+- Fig.7/8 Baseline 水平线 ✅
+- Fig.6/9 单调性与排序 ✅
+- 主要问题不是画错，而是：
+  1. GPT2 与 CNN 差距过小，四图几乎叠线
+  2. Fig.8 缺少多 Rmin 训练，曲线近水平
+  3. 传统 baseline 数值低于论文（已知实现差异）
+
+代码修复：
+
+- `eval_fig7.py` / `eval_fig8.py` checkpoint 选取：优先论文默认 run，排除 `*rmin*` / `*gamma*` 目录
+- 原因：旧逻辑 `'gamma' not in name` 会误选 `GPT2_rmin0.0`
+
+`⚠️ 未验证`：修复后尚未重跑 eval_fig7/eval_fig8，现有 JSON 可能仍来自旧模型。
+
+---
 
 依据：
 
