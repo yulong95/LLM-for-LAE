@@ -348,8 +348,6 @@ figures/training_curves.png
 
 ---
 
----
-
 ## 状态标记说明
 
 - ✅ 已完成并验证
