@@ -2,10 +2,11 @@
 plot_results.py — Plot paper figures from real eval JSON data
 No fallback, no hard-coded paper values. Data missing → skip with warning.
 
-Fig.5: Training curves (from train_log.csv)
+Fig.4: Normalized beamforming gain vs distance (theoretical, Lemma 1 / ENFR)
+Fig.5: Training curves of proposed model (from train_log.csv)
 Fig.6: Rate vs K (from eval_gpt2_results.json + eval_cnn_results.json + eval_baselines_results.json)
-Fig.7: Rate vs alpha_N (from eval_baselines_results.json; GPT2/CNN need gamma sweep)
-Fig.8: Rate vs Rmin (from eval_baselines_results.json; GPT2/CNN need Rmin sweep)
+Fig.7: Rate vs alpha_c (from eval_fig7_results.json + eval_baselines_results.json)
+Fig.8: Rate vs Rmin (from eval_fig8_results.json + eval_baselines_results.json)
 Fig.9: Rate vs P (from eval_gpt2_results.json + eval_cnn_results.json + eval_baselines_results.json)
 Table I: Accuracy vs SNR (from eval_gpt2_results.json + eval_cnn_results.json)
 """
@@ -29,11 +30,23 @@ fig_dir = os.path.join(base_dir, 'figures')
 os.makedirs(fig_dir, exist_ok=True)
 
 
-def find_latest_run(model_type):
-    pattern = os.path.join(output_dir, f"{model_type}_*")
+def find_latest_run(model_type, prefer_paper_defaults=True):
+    """Find training run dirs. Paper defaults: gamma=0.4, gamma2=5, rmin=0.6."""
+    prefix = 'GPT2' if model_type.lower() == 'gpt2' else model_type
+    pattern = os.path.join(output_dir, f"{prefix}_*")
     runs = sorted(glob.glob(pattern))
-    base_runs = [r for r in runs if 'gamma' not in os.path.basename(r).lower()]
-    return base_runs[-1] if base_runs else (runs[-1] if runs else None)
+    if not runs:
+        return None
+    if prefer_paper_defaults:
+        base_runs = []
+        for r in runs:
+            name = os.path.basename(r).lower()
+            if 'gamma' in name or 'rmin' in name:
+                continue
+            base_runs.append(r)
+        if base_runs:
+            return base_runs[-1]
+    return runs[-1]
 
 
 def load_log(run_dir, filename):
@@ -51,37 +64,135 @@ def load_json(filename):
         return json.load(f)
 
 
-# ==================== Figure 5: Training Loss Curves ====================
-def plot_training_curves():
+# ==================== Figure 4: Normalized Beamforming Gain ====================
+def plot_beamforming_gain():
+    """Paper Fig.4: |b^H a| vs horizontal distance for ground users.
+
+    Formulas match paper (3)(5)(6) and main_generate_data.m.
+    N=256, hB=15 m, theta_tilt=5 deg, fc=30 GHz, d=lambda/2, Delta=0.1.
+    Ground user at (x, 0); theta = atan(|h_k-h_B|/x) - theta_tilt.
+    """
+    N = 256
+    hB = 15.0
+    theta_tilt = np.deg2rad(5.0)
+    fc = 30e9
+    c = 3e8
+    lam = c / fc
+    d = lam / 2
+    Delta = 0.1
+    thr = 1.0 - Delta  # 0.9
+    h_user = 0.0
+    nn = np.arange(-(N - 1) / 2, (N - 1) / 2 + 1)
+
+    def normalized_bf_gain(x):
+        r0 = np.sqrt(x ** 2 + (h_user - hB) ** 2)
+        theta = np.arctan2(abs(h_user - hB), x) - theta_tilt
+        # mu = |(1/N) sum_n exp(j*pi*n^2*d^2*cos^2(theta)/(lam*r))|
+        x_param = (d ** 2 * np.cos(theta) ** 2) / (lam * r0)
+        return abs(np.mean(np.exp(1j * np.pi * (nn ** 2) * x_param)))
+
+    xs = np.linspace(0.1, 200.0, 4001)
+    gains = np.array([normalized_bf_gain(x) for x in xs])
+
+    # ENFR boundaries: gain crosses 1-Delta
+    crossings = []
+    below = gains < thr
+    for i in range(1, len(xs)):
+        if below[i - 1] == below[i]:
+            continue
+        x1, x2 = xs[i - 1], xs[i]
+        for _ in range(40):
+            xm = 0.5 * (x1 + x2)
+            if (normalized_bf_gain(xm) < thr) == below[i]:
+                x2 = xm
+            else:
+                x1 = xm
+        crossings.append(0.5 * (x1 + x2))
+
     fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(xs, gains, color='red', linewidth=1.8, label='The normalized beamforming gain')
+    ax.axhline(thr, color='blue', linestyle='--', linewidth=1.2,
+               label=rf'$\Delta={Delta}$ ($1-\Delta={thr}$)')
+    for xc in crossings:
+        ax.axvline(xc, color='blue', linestyle='--', linewidth=1.2, alpha=0.85)
 
-    for model_type, color in [('gpt2', 'red'), ('CNN', 'blue')]:
-        run = find_latest_run(model_type)
-        if not run:
-            print(f'  [SKIP] No {model_type} run found')
-            continue
-        log_file = 'train_log.csv' if model_type == 'gpt2' else 'train_log_cnn.csv'
-        log = load_log(run, log_file)
-        if log is None:
-            print(f'  [SKIP] No log file for {model_type}')
-            continue
+    ax.set_xlabel('Distance (m)')
+    ax.set_ylabel('Beamforming Gain')
+    ax.set_title('Normalized beamforming gain with far-field beamforming vector')
+    ax.set_xlim(0, 200)
+    ax.set_ylim(0.5, 1.0)
+    ax.legend(loc='lower right', fontsize=10)
+    plt.tight_layout()
+    save_path = os.path.join(fig_dir, 'Fig4_beamforming_gain.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f'Saved: {save_path}')
+    if crossings:
+        print(f'  ENFR crossings (m): {[round(xc, 3) for xc in crossings]}')
+    print(f'  Min gain: {gains.min():.4f} at x={xs[gains.argmin()]:.2f} m')
+    plt.close()
 
-        epochs = log['epoch']
-        linestyle = '-' if model_type == 'gpt2' else '--'
-        ax.plot(epochs, log['train_loss'], color=color,
-                label=f'{model_type.upper()} Training', linewidth=1.5, linestyle=linestyle)
-        val_col = 'val_loss' if 'val_loss' in log.columns else 'val_rate'
-        ax.plot(epochs, log[val_col], color=color,
-                label=f'{model_type.upper()} Validation', linewidth=1.5, linestyle=linestyle, alpha=0.6)
+
+# ==================== Figure 5: Training Loss Curves ====================
+def _extract_train_val(log, model_key):
+    """Return epochs, train_loss, val_loss, best_idx for paper Fig.5 metric."""
+    epochs = log['epoch'].to_numpy()
+    train_loss = log['train_loss'].to_numpy(dtype=float)
+
+    if 'val_mu_loss' in log.columns:
+        val_loss = log['val_mu_loss'].to_numpy(dtype=float)
+        note = 'val_mu_loss'
+    elif 'val_loss' in log.columns:
+        val_loss = log['val_loss'].to_numpy(dtype=float)
+        note = 'val_loss'
+    elif 'val_rate' in log.columns:
+        # RateCal logged as val_rate; Loss_pre ≈ -sum_rate when penalty≈0
+        val_loss = -log['val_rate'].to_numpy(dtype=float)
+        note = '-val_rate (Loss_pre proxy)'
+    else:
+        return None
+    best_idx = int(np.nanargmin(val_loss))
+    print(f'  [{model_key}] validation metric: {note}; best epoch={int(epochs[best_idx])}, '
+          f'val={val_loss[best_idx]:.4f}')
+    return epochs, train_loss, val_loss, best_idx
+
+
+def plot_training_curves():
+    """Paper Fig.5: proposed model training/validation loss vs epoch."""
+    run = find_latest_run('gpt2', prefer_paper_defaults=True)
+    if not run:
+        print('  [SKIP] No GPT2 run found for Fig.5')
+        return
+    log = load_log(run, 'train_log.csv')
+    if log is None:
+        print(f'  [SKIP] No train_log.csv in {run}')
+        return
+    print(f'Fig.5 source run: {run}')
+    extracted = _extract_train_val(log, 'GPT2')
+    if extracted is None:
+        print('  [SKIP] GPT2 log has no usable loss columns')
+        return
+    epochs, train_loss, val_loss, best_idx = extracted
+    best_epoch = int(epochs[best_idx])
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(epochs, train_loss, color='red', linewidth=1.5, label='Training')
+    ax.plot(epochs, val_loss, color='blue', linewidth=1.5, label='Validation')
+    ax.scatter([epochs[best_idx]], [val_loss[best_idx]], s=80, facecolors='none',
+               edgecolors='purple', linewidths=1.5, zorder=5,
+               label=f'Best val (epoch {best_epoch})')
 
     ax.set_xlabel('Training epoch')
     ax.set_ylabel('Loss')
     ax.set_title('Training loss and validation loss against training epoch')
-    ax.legend()
+    ax.legend(loc='best')
     plt.tight_layout()
-    save_path = os.path.join(fig_dir, 'training_curves.png')
+    save_path = os.path.join(fig_dir, 'Fig5_training_curves.png')
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    # keep legacy filename
+    legacy = os.path.join(fig_dir, 'training_curves.png')
+    plt.savefig(legacy, dpi=150, bbox_inches='tight')
     print(f'Saved: {save_path}')
+    print(f'Saved: {legacy}')
     plt.close()
 
 
@@ -173,9 +284,7 @@ def plot_rate_vs_power():
 # ==================== Figure 7: Rate vs alpha_N ====================
 def plot_rate_vs_alpha():
     bl = load_json('eval_baselines_results.json')
-    if not bl or 'fig7' not in bl:
-        print('  [SKIP] Baselines data unavailable for Fig.7')
-        return
+    fig7_data = load_json('eval_fig7_results.json')
 
     alphas = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     markers = {'Capacity': 's', 'Proposed': '^', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
@@ -183,13 +292,27 @@ def plot_rate_vs_alpha():
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    for name in ['Capacity', 'NF-NOMA', 'LDMA', 'SDMA']:
-        vals = [bl['fig7'][str(a)][name] for a in alphas]
-        ax.plot(alphas, vals, marker=markers[name], color=colors[name], label=name, linewidth=1.6, markersize=8)
+    # Baselines (horizontal lines)
+    if bl and 'fig7' in bl:
+        for name in ['Capacity', 'NF-NOMA', 'LDMA', 'SDMA']:
+            vals = [bl['fig7'][str(a)][name] for a in alphas]
+            ax.plot(alphas, vals, marker=markers[name], color=colors[name], label=name, linewidth=1.6, markersize=8)
 
-    ax.set_xlabel(r'$\alpha_N$')
+    # GPT2 curve
+    if fig7_data and 'gpt2_fig7' in fig7_data:
+        gamma_vals = [str(a) for a in alphas]
+        rates = [fig7_data['gpt2_fig7'][g]['rate'] for g in gamma_vals]
+        ax.plot(alphas, rates, marker='^', color='b', linestyle='-', label='Proposed (GPT2)', linewidth=1.5, markersize=10)
+
+    # CNN curve
+    if fig7_data and 'cnn_fig7' in fig7_data:
+        gamma_vals = [str(a) for a in alphas]
+        rates = [fig7_data['cnn_fig7'][g]['rate'] for g in gamma_vals]
+        ax.plot(alphas, rates, marker='d', color='c', linestyle='--', label='CNN', linewidth=1.5, markersize=10)
+
+    ax.set_xlabel(r'$\alpha_c$')
     ax.set_ylabel('Spectrum Efficiency (bps/Hz)')
-    ax.set_title(r'Spectrum Efficiency vs $\alpha_N$')
+    ax.set_title(r'Spectrum Efficiency vs $\alpha_c$')
     ax.legend(fontsize=9)
     plt.tight_layout()
     save_path = os.path.join(fig_dir, 'Fig7_rate_vs_alpha.png')
@@ -201,9 +324,7 @@ def plot_rate_vs_alpha():
 # ==================== Figure 8: Rate vs Rmin ====================
 def plot_rate_vs_Rmin():
     bl = load_json('eval_baselines_results.json')
-    if not bl or 'fig8' not in bl:
-        print('  [SKIP] Baselines data unavailable for Fig.8')
-        return
+    fig8_data = load_json('eval_fig8_results.json')
 
     rmins = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
     markers = {'Capacity': 's', 'Proposed': '^', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
@@ -211,9 +332,29 @@ def plot_rate_vs_Rmin():
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    for name in ['Capacity', 'NF-NOMA', 'LDMA', 'SDMA']:
-        vals = [bl['fig8'][str(r)][name] for r in rmins]
-        ax.plot(rmins, vals, marker=markers[name], color=colors[name], label=name, linewidth=1.6, markersize=8)
+    # Baselines (horizontal lines)
+    if bl and 'fig8' in bl:
+        for name in ['Capacity', 'NF-NOMA', 'LDMA', 'SDMA']:
+            vals = [bl['fig8'][str(r)][name] for r in rmins]
+            ax.plot(rmins, vals, marker=markers[name], color=colors[name], label=name, linewidth=1.6, markersize=8)
+
+    # GPT2 curve
+    if fig8_data and 'gpt2_fig8' in fig8_data:
+        rmin_strs = [str(r) for r in rmins]
+        available = [r for r in rmin_strs if r in fig8_data['gpt2_fig8']]
+        if available:
+            rates = [fig8_data['gpt2_fig8'][r]['rate'] for r in available]
+            r_vals = [float(r) for r in available]
+            ax.plot(r_vals, rates, marker='^', color='b', linestyle='-', label='Proposed (GPT2)', linewidth=1.5, markersize=10)
+
+    # CNN curve
+    if fig8_data and 'cnn_fig8' in fig8_data:
+        rmin_strs = [str(r) for r in rmins]
+        available = [r for r in rmin_strs if r in fig8_data['cnn_fig8']]
+        if available:
+            rates = [fig8_data['cnn_fig8'][r]['rate'] for r in available]
+            r_vals = [float(r) for r in available]
+            ax.plot(r_vals, rates, marker='d', color='c', linestyle='--', label='CNN', linewidth=1.5, markersize=10)
 
     ax.set_xlabel(r'$R_{\min}$ (bps/Hz)')
     ax.set_ylabel('Spectrum Efficiency (bps/Hz)')
@@ -259,9 +400,9 @@ def save_tables():
     bl_names = ['Capacity', 'NF-NOMA', 'LDMA', 'SDMA']
     header = f'{"K":<5}'
     if gpt2_data and 'k_sweep' in gpt2_data:
-        header += ' {"GPT2":>10}'
+        header += f' {"GPT2":>10}'
     if cnn_data and 'k_sweep' in cnn_data:
-        header += ' {"CNN":>10}'
+        header += f' {"CNN":>10}'
     for name in bl_names:
         header += f' {name:>10}'
     lines.append(header)
@@ -286,7 +427,9 @@ def save_tables():
 
 
 if __name__ == '__main__':
-    print('Plotting training curves...')
+    print('Plotting beamforming gain (Fig.4)...')
+    plot_beamforming_gain()
+    print('Plotting training curves (Fig.5)...')
     plot_training_curves()
     print('Plotting rate vs K (Fig.6)...')
     plot_rate_vs_K()

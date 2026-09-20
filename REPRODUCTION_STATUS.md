@@ -22,11 +22,11 @@
 
 | 项目                   | 状态      | 当前情况                           |
 | -------------------- | ------- | ------------------------------ |
-| Fig.4                | ⏳ 待完成   | 理论波束增益                         |
-| Fig.5                | ✅ 已生成   | 训练曲线，后续可优化平滑度                  |
+| Fig.4                | ✅ 已生成   | 理论归一化波束增益，ENFR边界≈5.7/82.1 m          |
+| Fig.5                | ✅ 已生成   | Proposed训练/验证损失；当前100 epoch，验证损失用-val_rate代理 |
 | Fig.6                | ✅ 已生成   | Rate vs K                      |
-| Fig.7                | 🟡 部分完成 | Baseline应为水平线                  |
-| Fig.8                | 🟡 部分完成 | GPT2/CNN需不同Rmin训练，Baseline为水平线 |
+| Fig.7                | ✅ 已生成   | Baseline水平线 + GPT2/CNN曲线       |
+| Fig.8                | 🟡 部分完成 | Baseline水平线正确，GPT2/CNN需不同Rmin训练模型 |
 | Fig.9                | ✅ 已生成   | Rate vs P                      |
 | Table I              | ✅ 已完成   | 分类准确率                          |
 | Table II             | ✅ 已完成   | 参数量/时间                         |
@@ -61,13 +61,17 @@
 
 ### Fig.7
 
-**Rate vs alpha_N**
+**Rate vs alpha_c**
 
-传统Baseline没有本文方法的 alpha_N 约束。
+传统Baseline没有 alpha_c 约束，表现为水平线。
 
-因此：
+GPT2/CNN：同一checkpoint用不同gamma评估，产生上升曲线。
 
-> Baseline必须表现为水平线。
+当前结果：
+
+- Baselines 水平线 ✅
+- GPT2/CNN 曲线 ✅
+- 趋势：alpha_c 增大 → Rate 增大，趋近 Capacity
 
 ---
 
@@ -75,15 +79,16 @@
 
 **Rate vs R_min**
 
-传统Baseline没有本文方法的最小速率约束。
+传统Baseline没有最小速率约束，表现为水平线。
 
-因此：
+GPT2/CNN：需要不同 Rmin 训练的模型才能产生下降曲线。
 
-> Baseline必须表现为水平线。
+当前结果：
 
-GPT2/CNN：
+- Baselines 水平线 ✅
+- GPT2/CNN：仅有 Rmin=0.6 模型，推理时改变 Rmin 阈值不影响结果
 
-> 不同 R_min 应使用对应训练设置/模型，以产生下降曲线。
+> 需要重新训练模型才能完成 Fig.8
 
 ---
 
@@ -218,12 +223,35 @@ GPT2/CNN：
 
 ## 当前优先级
 
-1. Fig.7
-2. Fig.8
-3. Fig.4
-4. Table III
-5. Transformer baseline
-6. 最终统一运行全部实验并生成最终图表
+1. Fig.8（需不同Rmin重训）
+2. Table III
+3. Transformer baseline
+4. Fig.5（可选：按论文500 epoch重训后用val_mu_loss重绘）
+5. 最终统一运行全部实验并生成最终图表
+
+---
+
+## Fig.4 / Fig.5 复现说明
+
+### Fig.4
+
+- 文件：`figures/Fig4_beamforming_gain.png`
+- 方法：理论计算 `μ=|b^H a|`，与 `main_generate_data.m` 同公式
+- 参数：N=256, hB=15 m, θ_tit=5°, fc=30 GHz, d=λ/2, 地面用户 h_k=0
+- 门限：Δ=0.1 → 1-Δ=0.9
+- 结果：增益先降后升；ENFR边界 x≈5.73 m 与 x≈82.10 m；最低增益≈0.517（x≈19.3 m）
+- 与论文趋势一致，验证 Lemma 1（ENFR位于两个远场区之间）
+
+### Fig.5
+
+- 文件：`figures/Fig5_training_curves.png`（兼容名 `training_curves.png`）
+- 对象：Proposed (GPT2)，论文 Fig.5 只画所提模型
+- 数据来源：`output/GPT2_09.02_12-35-10/train_log.csv`（论文默认超参）
+- 训练损失：日志 `train_loss`（MULoss + γ2·MSE）
+- 验证损失：当前日志无 `val_mu_loss`，用 `-val_rate` 作为 Loss_pre 代理
+- 最佳验证：epoch 98
+- 已知差异：论文为 500 epoch、最佳 epoch 304；当前项目默认仅 100 epoch
+- `hybrid_field_all.py` 已增加 `val_mu_loss` 日志，后续重训可直接画真实验证损失
 
 ---
 
@@ -231,28 +259,27 @@ GPT2/CNN：
 
 日期：
 
-`2026-09-03`
+`2026-09-20`
 
 验证命令：
 
 ```text
-python eval_gpt2.py
-python eval_cnn.py --gamma 0.4
-python eval_baselines.py
 python plot_results.py
 ```
 
-Git commit：
+产出：
 
 ```text
-8c73778 [基线] 修复Fig.8 Rmin惩罚错误，统一gamma=0.4
+figures/Fig4_beamforming_gain.png
+figures/Fig5_training_curves.png
+figures/training_curves.png
 ```
 
-Git push：
+说明：
 
-```text
-成功推送到 origin/main
-```
+- Fig.4 为理论计算，无需训练
+- Fig.5 使用既有 GPT2 默认参数训练日志
+- Fig.6~9 重跑 plot_results 仍从现有 JSON 生成
 
 ---
 

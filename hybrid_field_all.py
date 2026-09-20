@@ -22,6 +22,7 @@ N, K = 256, 10
 parser = argparse.ArgumentParser()
 parser.add_argument('--gamma', type=float, default=0.4, help='Maximum allowed near-field power ratio (alpha_c). Paper Fig.6/8/9 uses 0.4')
 parser.add_argument('--gamma2', type=float, default=5.0, help='Classification loss weight')
+parser.add_argument('--rmin', type=float, default=0.6, help='Minimum rate constraint (Rmin). Paper Fig.8 sweeps this.')
 parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--batch_size', type=int, default=100)
@@ -32,11 +33,13 @@ gpt2_model_path = r"C:\Users\17859\.cache\huggingface\hub\models--openai-communi
 data_root = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\Data_user.mat"
 base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output"
 
-# Output dir naming (paper default: gamma=0.4, gamma2=5.0)
+# Output dir naming (paper default: gamma=0.4, gamma2=5.0, rmin=0.6)
 if args.gamma != 0.4:
     dir_tag = f"GPT2_gamma{args.gamma:.1f}"
 elif args.gamma2 != 5.0:
     dir_tag = f"GPT2_gamma2_{args.gamma2}"
+elif args.rmin != 0.6:
+    dir_tag = f"GPT2_rmin{args.rmin:.1f}"
 else:
     dir_tag = "GPT2"
 output_dir = os.path.join(base_output, f"{dir_tag}_{datetime.datetime.now().strftime('%m.%d_%H-%M-%S')}")
@@ -53,7 +56,7 @@ def train(training_loader, validate_loader, test_loader):
     best_checkpoint = os.path.join(output_dir, 'best.bin')
     log_path = os.path.join(output_dir, 'train_log.csv')
     with open(log_path, 'w') as f:
-        f.write('epoch,train_loss,val_rate,val_acc,time_sec,saved\n')
+        f.write('epoch,train_loss,val_rate,val_acc,val_mu_loss,time_sec,saved\n')
 
     print(f"Training GPT2: gamma={args.gamma}, gamma2={args.gamma2}, {args.epochs} epochs")
     print(f"Output: {output_dir}")
@@ -89,6 +92,7 @@ def train(training_loader, validate_loader, test_loader):
         epoch_val_loss = []
         epoch_val_loss_cl = []
         epoch_alpha_N = []
+        epoch_val_mu = []
         with torch.no_grad():
             for data in validate_loader:
                 H = data['H'].to(device, non_blocking=True)
@@ -97,8 +101,10 @@ def train(training_loader, validate_loader, test_loader):
                 p_hat, lamda_hat, cl_hat = model(H, cl)
                 loss_pre = criterion_test(p_hat, lamda_hat, H)
                 loss_cl = criterion_test_cl(cl, torch.unsqueeze(cl_hat, dim=2))
+                mu_loss = criterion_train(p_hat, lamda_hat, H)
                 epoch_val_loss.append(loss_pre.item())
                 epoch_val_loss_cl.append(loss_cl.item())
+                epoch_val_mu.append(mu_loss.item())
                 # Compute actual alpha_N from final V: alpha_N = ||V_near||² / ||V_total||²
                 sigma2_val = 10 ** (-20 / 10)
                 V = pq2V(p_hat, lamda_hat, H, sigma2_val, N)
@@ -114,6 +120,7 @@ def train(training_loader, validate_loader, test_loader):
         epoch_rate = np.nanmean(np.array(epoch_val_loss))
         epoch_acc = np.nanmean(np.array(epoch_val_loss_cl))
         epoch_alpha_N_mean = np.nanmean(np.array(epoch_alpha_N))
+        val_mu_loss = np.nanmean(np.array(epoch_val_mu))
 
         saved = False
         if epoch_rate > best_rate:
@@ -123,7 +130,7 @@ def train(training_loader, validate_loader, test_loader):
             saved = True
 
         with open(log_path, 'a') as f:
-            f.write(f'{epoch+1},{train_loss_val:.7f},{epoch_rate:.7f},{epoch_acc:.7f},{time_elapsed:.1f},{saved}\n')
+            f.write(f'{epoch+1},{train_loss_val:.7f},{epoch_rate:.7f},{epoch_acc:.7f},{val_mu_loss:.7f},{time_elapsed:.1f},{saved}\n')
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
             print(f"  Epoch {epoch+1}/{args.epochs}: rate={epoch_rate:.4f} acc={epoch_acc:.4f} alpha_N={epoch_alpha_N_mean:.4f} (gamma={args.gamma}) time={time_elapsed:.1f}s {'SAVED' if saved else ''}")
@@ -171,7 +178,7 @@ if __name__ == "__main__":
     test_set = ChannelDataset(data_root, is_train=2)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=0.0001)
-    criterion_train = MULoss().to(device)
+    criterion_train = MULoss(rmin=args.rmin).to(device)
     criterion_test = RateCal().to(device)
     criterion_train_cl = nn.MSELoss().to(device)
     criterion_test_cl = ACCLoss().to(device)

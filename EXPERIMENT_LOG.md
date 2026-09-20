@@ -198,3 +198,53 @@ Paper = 26.68
 | 2026-09-03 | Fig.9      | 已生成   | ✅      |
 | 2026-09-03 | Table I    | 已完成   | ✅      |
 | 2026-09-03 | Table II   | 已完成   | ✅      |
+| 2026-09-20 | Fig.4      | 理论BF gain，ENFR≈[5.7,82.1]m | ✅ |
+| 2026-09-20 | Fig.5      | GPT2 train/val loss，100 epoch | ✅ |
+
+---
+
+## Fig.4 波束增益
+
+依据：
+
+- 论文第五节-B 与 Fig.4
+- 公式 (3)(5)(6)(8)
+- `main_generate_data.m` 中 `|b^H a|` 计算
+
+实现：
+
+```text
+plot_results.py::plot_beamforming_gain
+```
+
+结果要点：
+
+- 曲线先下降后上升，与论文一致
+- Δ=0.1 门限对应增益 0.9
+- 水平地面用户、俯仰角几何下 ENFR 约为 5.7 m ~ 82.1 m
+- 不使用任何训练数据，纯理论计算
+
+---
+
+## Fig.5 训练曲线
+
+问题：
+
+- 旧 `training_curves.png` 图像为空/坐标异常
+- GPT2 旧日志仅记录 `val_rate`，无验证损失
+- 旧绘图将 `val_rate`(≈32) 与 `train_loss`(≈-32) 混在同一坐标，且 CNN/GPT2 混画，与论文 Fig.5（仅 proposed）不符
+
+修复：
+
+1. `plot_results.py::plot_training_curves` 只画 Proposed (GPT2)
+2. 验证损失优先 `val_mu_loss`，否则回退 `-val_rate`
+3. 标注最低验证损失对应 epoch
+4. `hybrid_field_all.py` 训练日志新增 `val_mu_loss` 列
+
+结果：
+
+- 当前曲线来自论文默认参数 run `GPT2_09.02_12-35-10`
+- 训练损失快速下降后收敛，形态与论文趋势一致
+- `⚠️ 未验证`：尚未按论文 500 epoch 重训；绝对数值与论文 Fig.5（约 -27.x）不同
+
+---
