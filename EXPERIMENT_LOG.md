@@ -226,7 +226,32 @@ Paper = 26.68
 - `eval_fig7.py` / `eval_fig8.py` checkpoint 选取：优先论文默认 run，排除 `*rmin*` / `*gamma*` 目录
 - 原因：旧逻辑 `'gamma' not in name` 会误选 `GPT2_rmin0.0`
 
-`⚠️ 未验证`：修复后尚未重跑 eval_fig7/eval_fig8，现有 JSON 可能仍来自旧模型。
+### Fig.7 重跑（2026-09-20）
+
+命令：
+
+```text
+python eval_fig7.py
+python plot_results.py
+```
+
+选用 checkpoint：
+
+- GPT2: `GPT2_09.02_12-35-10/best.bin`
+- CNN: `CNN_09.02_22-04-51/6.pth`
+
+关键结果（α_c=0.4）：
+
+- GPT2 rate=31.9208, acc=0.9584, α_N=0.3410
+- CNN rate=31.8652, acc=0.7928, α_N=0.3376
+- Baseline 水平线保持不变
+
+结论：
+
+- 修复后的选取逻辑加载的是论文默认模型
+- 数值与重跑前 JSON 一致，说明此前 Fig.7 结果本身可用
+- GPT2/CNN 间隙仍仅约 0.06，属于模型性能差异，不是评估错误
+- `⚠️ 未验证`：`eval_fig8_results.json` 尚未用同一逻辑重跑
 
 ---
 

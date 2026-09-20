@@ -312,10 +312,15 @@ figures/training_curves.png
    - K=10：NOMA 23.81 vs 论文 26.68；LDMA 23.38 vs 25.02；SDMA 20.80 vs 23.47
    - Capacity 32.25 vs 32.65（可接受）
 
-4. **Checkpoint 选取风险（已修代码，`⚠️ 当前JSON未重跑`）**
+4. **Checkpoint 选取风险（已修并重跑验证）**
    - 旧 `eval_fig7/8.py` 在过滤 `gamma` 后会命中 `GPT2_rmin0.0`
    - 已改为优先论文默认 run（无 gamma/rmin 标签）
-   - 现有 `eval_fig7_results.json` / `eval_fig8_results.json` 仍可能是旧模型结果
+   - 2026-09-20 已重跑 `eval_fig7.py`：
+     - GPT2: `GPT2_09.02_12-35-10/best.bin`
+     - CNN: `CNN_09.02_22-04-51/6.pth`
+     - α_c=0.4 时 GPT2=31.9208 / CNN=31.8652，与此前 JSON 一致
+   - 结论：现有 Fig.7 数据对应论文默认模型，checkpoint 选取问题不影响该图数值
+   - `eval_fig8_results.json` 仍未重跑，Fig.8 可能仍需复核
 
 5. **Fig.7 坐标标签**
    - 论文横轴写作 α_N
