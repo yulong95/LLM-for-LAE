@@ -264,22 +264,18 @@ GPT2/CNN：需要不同 Rmin 训练的模型才能产生下降曲线。
 验证命令：
 
 ```text
+python eval_gpt2.py --quick
+python eval_cnn.py --quick
 python plot_results.py
 ```
 
-产出：
+产出确认：
 
-```text
-figures/Fig4_beamforming_gain.png
-figures/Fig5_training_curves.png
-figures/training_curves.png
-```
-
-说明：
-
-- Fig.4 为理论计算，无需训练
-- Fig.5 使用既有 GPT2 默认参数训练日志
-- Fig.6~9 重跑 plot_results 仍从现有 JSON 生成
+- GPT2 ckpt: `GPT2_09.02_12-35-10`
+- CNN ckpt: `CNN_09.02_22-04-51`
+- K=10 rate: GPT2 31.92 / CNN 31.87
+- Table I（统一 AWGN）：GPT2 0dB 0.8466 / 20dB 0.9575；CNN 0dB 0.5763 / 20dB 0.7926
+- figures/ 已重绘
 
 ---
 
@@ -405,20 +401,29 @@ figures/training_curves.png
 
 ### 仍存在的问题清单
 
-1. **Table I @0dB**：GPT2/CNN 分类准确率偏低约 10–12 pp → BAD，低 SNR 鲁棒性不足  
-2. **Fig.8 形态**：GPT2/CNN 随 Rmin 几乎水平（Δ≈0.01），论文下降约 0.3–0.7 → 未完成  
-3. **GPT2−CNN rate 间隙**：≈0.06 vs 论文 ≈0.51 → 结构性，已诊断非简单选模/C3 标签问题  
-4. **传统 baseline**：NOMA/SDMA 相对论文低 8–20% → 已知实现差异（equal power / 码本），**不改算法硬拟合**  
+1. **Table I @0dB**：协议修复并统一 AWGN 后，GPT2 acc@0dB≈84.7%（论文 94.8%），CNN≈57.6%（论文 80.3%）→ 仍 BAD。主因：训练未用 CSI 噪声增强，非评估选错模型  
+2. **Fig.8 形态**：GPT2/CNN 随 Rmin 几乎水平（Δ≈0.01），论文下降约 0.3–0.7 → 需多 Rmin 重训  
+3. **GPT2−CNN rate 间隙**：≈0.06 vs 论文 ≈0.51 → 结构性，已诊断  
+4. **传统 baseline**：NOMA/SDMA 相对论文低 8–20% → 已知实现差异，**不改算法硬拟合**  
 5. **Fig.4/5**：Fig.4 理论形态 OK；Fig.5 100 epoch + 验证代理损失，与论文 500 epoch 不完全同口径  
 6. **Table III / Transformer**：尚未完成  
+
+### 协议修复记录（2026-09-20）
+
+- 修复 `eval_gpt2.py`/`eval_cnn.py` checkpoint 选取（排除 rmin/gamma run）
+- 统一 Table I 复数 AWGN：`E[|n|^2]=E[|H|^2]/10^(SNR/10)`
+- 重跑后 K=10 rate 不变；CNN@0dB 因噪声定义更严而下降（更诚实）
+- **未**修改论文约束、baseline 算法或为拟合曲线改 loss
 
 ### 总体判断
 
 - **Capacity、GPT2/CNN 主趋势、Fig.7 Baseline 水平线**：可写入报告，标注 WARN 级数值偏差  
-- **不能声称**与论文数值完全一致  
-- 优先待办：Fig.8 多 Rmin 重训；Table I 低 SNR；Table III  
+- **不能声称**与论文数值完全一致；Table I@0dB 与 Fig.8 形态仍不达标  
+- 若要继续逼近论文：需 CSI 噪声增强训练（Table I）与多 Rmin 重训（Fig.8），属于补实验而非改协议  
 
 ---
+
+## 状态标记说明
 
 - ✅ 已完成并验证
 - 🟡 部分完成 / 存在已知差异

@@ -32,10 +32,17 @@ args = parser.parse_args()
 
 # ===================== Model loading =====================#
 def find_latest_run(gamma=0.4):
+    runs = sorted(glob.glob(os.path.join(base_output, "GPT2_*")))
     if gamma == 0.4:
-        runs = sorted(glob.glob(os.path.join(base_output, "GPT2_*")))
-        valid = [r for r in runs if glob.glob(os.path.join(r, '*.bin'))
-                 and 'gamma' not in os.path.basename(r)]
+        # Paper-default run: no gamma/rmin tag (must not pick GPT2_rmin* / GPT2_gamma*)
+        valid = []
+        for r in runs:
+            name = os.path.basename(r).lower()
+            if not glob.glob(os.path.join(r, '*.bin')):
+                continue
+            if 'gamma' in name or 'rmin' in name:
+                continue
+            valid.append(r)
     else:
         runs = sorted(glob.glob(os.path.join(base_output, f"GPT2_gamma{gamma:.1f}_*")))
         valid = [r for r in runs if glob.glob(os.path.join(r, '*.bin'))]
@@ -110,6 +117,21 @@ def eval_k(model, loader, K_eval, sigma2=None):
     return np.mean(rates), np.mean(accs), np.mean(alpha_Ns)
 
 
+def add_csi_awgn(H_flat, snr_db):
+    """Add AWGN to real/imag-concatenated channel so complex SNR = snr_db.
+
+    SNR definition: E[|H_c|^2] / E[|n_c|^2] = 10^(snr_db/10).
+    Same protocol for GPT2 and CNN Table-I evaluation.
+    """
+    H_4d = H_flat.reshape(*H_flat.shape[:-1], H_flat.shape[-1] // 2, 2)
+    H_complex = torch.complex(H_4d[..., 0], H_4d[..., 1])
+    p_sig = torch.mean(torch.abs(H_complex) ** 2)
+    noise_cplx_power = p_sig / (10 ** (snr_db / 10.0))
+    n_complex = (torch.randn_like(H_complex) + 1j * torch.randn_like(H_complex)) * torch.sqrt(noise_cplx_power / 2.0)
+    noise = torch.stack([n_complex.real, n_complex.imag], dim=-1).reshape_as(H_flat)
+    return H_flat + noise
+
+
 def eval_snr(model, loader, snr_db):
     criterion_rate = RateCal().to(device)
     criterion_acc = ACCLoss().to(device)
@@ -119,13 +141,7 @@ def eval_snr(model, loader, snr_db):
             H = data['H'].to(device, non_blocking=True)
             cl = data['cl'].to(device, non_blocking=True)
             H = rearrange(H, 'n W H a -> n W (H a)')
-            H_4d = H.reshape(*H.shape[:-1], H.shape[-1] // 2, 2)
-            H_complex = torch.complex(H_4d[..., 0], H_4d[..., 1])
-            P_signal = torch.mean(torch.abs(H_complex) ** 2).item()
-            noise_power = P_signal / (10 ** (snr_db / 10))
-            n_complex = (torch.randn_like(H_complex) + 1j * torch.randn_like(H_complex)) * (noise_power / 2.0) ** 0.5
-            noise = torch.stack([n_complex.real, n_complex.imag], dim=-1).reshape_as(H)
-            H = H + noise
+            H = add_csi_awgn(H, snr_db)
             mean = torch.mean(H)
             std = torch.std(H)
             p_hat, lamda_hat, cl_hat = model(H, cl, mean, std)

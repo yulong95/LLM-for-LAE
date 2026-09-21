@@ -28,11 +28,17 @@ args = parser.parse_args()
 
 # ===================== Model loading =====================#
 def find_latest_run(gamma=0.4):
+    runs = sorted(glob.glob(os.path.join(base_output, "CNN_*")))
     if gamma == 0.4:
-        runs = sorted(glob.glob(os.path.join(base_output, "CNN_*")))
-        valid = [r for r in runs
-                 if glob.glob(os.path.join(r, '*.pth'))
-                 and 'gamma' not in os.path.basename(r)]
+        # Paper-default run: no gamma/rmin tag
+        valid = []
+        for r in runs:
+            name = os.path.basename(r).lower()
+            if not glob.glob(os.path.join(r, '*.pth')):
+                continue
+            if 'gamma' in name or 'rmin' in name:
+                continue
+            valid.append(r)
     else:
         runs = sorted(glob.glob(os.path.join(base_output, f"CNN_gamma{gamma:.1f}_*")))
         valid = [r for r in runs if glob.glob(os.path.join(r, '*.pth'))]
@@ -102,6 +108,17 @@ def eval_k(model, loader, K_eval):
     return np.mean(rates), np.mean(accs)
 
 
+def add_csi_awgn(H_flat, snr_db):
+    """Add AWGN so complex SNR = snr_db. Matches eval_gpt2.add_csi_awgn."""
+    H_4d = H_flat.reshape(*H_flat.shape[:-1], H_flat.shape[-1] // 2, 2)
+    H_complex = torch.complex(H_4d[..., 0], H_4d[..., 1])
+    p_sig = torch.mean(torch.abs(H_complex) ** 2)
+    noise_cplx_power = p_sig / (10 ** (snr_db / 10.0))
+    n_complex = (torch.randn_like(H_complex) + 1j * torch.randn_like(H_complex)) * torch.sqrt(noise_cplx_power / 2.0)
+    noise = torch.stack([n_complex.real, n_complex.imag], dim=-1).reshape_as(H_flat)
+    return H_flat + noise
+
+
 def eval_snr(model, loader, snr_db):
     criterion_rate = RateCal().to(device)
     criterion_acc = ACCLoss().to(device)
@@ -110,20 +127,10 @@ def eval_snr(model, loader, snr_db):
         for data in loader:
             H = data['H'].to(device, non_blocking=True)
             cl = data['cl'].to(device, non_blocking=True)
-            H_re = rearrange(H, 'n k W H -> n H W k', H=2)
-            H_sliced = H_re[:, :, :, :K]
-            sigma_ext = 10 ** (-snr_db / 10)
-            noise = torch.sqrt(torch.tensor(sigma_ext / 2.0)) * torch.randn_like(H_sliced)
-            noise = noise * torch.sqrt(torch.mean(torch.abs(H_sliced) ** 2))
-            H_sliced = H_sliced + noise
-            H0 = torch.zeros(H_re.shape, device=device)
-            H0[:, :, :, :K] = H_sliced
-            mean = torch.mean(H_sliced)
-            std = torch.std(H_sliced)
-            p_hat, lamda_hat, cl_hat = model(H0, cl, K, mean, std)
-            H_rate = rearrange(H0, 'n H W k -> n k (W H)')
+            H_noisy = add_csi_awgn(H, snr_db)
+            p_hat, lamda_hat, cl_hat, H_rate, _ = cnn_forward(model, H_noisy, cl, K)
             r = criterion_rate(p_hat, lamda_hat, H_rate).item()
-            a = criterion_acc(cl, torch.unsqueeze(cl_hat, dim=2)).item()
+            a = criterion_acc(cl[:, :K, :], torch.unsqueeze(cl_hat, dim=2)).item()
             rates.append(r)
             accs.append(a)
     return np.mean(rates), np.mean(accs)
