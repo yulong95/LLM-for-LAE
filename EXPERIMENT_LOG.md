@@ -426,3 +426,21 @@ test 指标（两种选择相同）：
 - 下一步若要贴近论文 rate 间隙，需要结构性实验（分类门控预编码）或接受差异并写明
 
 ---
+
+## 全量误差对照（2026-09-20）
+
+对照 `refs/Data.xlsx` + Table I，误差带约定见 `REPRODUCTION_STATUS.md`。
+
+要点：
+
+- GPT2 rate 相对论文多在 +1%~+3.5%（WARN）
+- CNN rate 多在 +2%~+5%（WARN），普遍高于论文
+- Capacity 相对误差约 −0.1%~−1.2%（OK）
+- NF-NOMA/SDMA 常 −8%~−20%（BAD，实现差异）
+- Table I 高 SNR 差 3–5pp（WARN）；**0dB 差 10–12pp（BAD）**
+- Fig.8 数值 WARN，但曲线形态不符合论文下降趋势
+- Fig.7/8 Baseline 水平线约束 ✅
+
+`⚠️`：数值偏差≠一定是代码 bug；趋势与绝对约束优先。
+
+---
