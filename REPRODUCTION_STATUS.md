@@ -221,13 +221,19 @@ GPT2/CNN：需要不同 Rmin 训练的模型才能产生下降曲线。
 
 ---
 
-## 当前优先级
+## 当前优先级（2026-09-28 收束）
 
-1. Fig.8（需不同Rmin重训）
-2. Table III
-3. Transformer baseline
-4. Fig.5（可选：按论文500 epoch重训后用val_mu_loss重绘）
-5. 最终统一运行全部实验并生成最终图表
+已决定**不再**为贴论文曲线继续：
+
+- Fig.8 多 Rmin 硬拉下降形态
+- Table III γ2 全扫描
+- 为拉开 GPT2/CNN 间隙而改算法定义
+
+若后续继续，仅剩真正有价值的方向：
+
+1. Transformer baseline（目标清单仍缺）
+2. 按论文 500 epoch 重训 Proposed（可选，对齐 Fig.5）
+3. 写复现报告：如实标注 WARN/BAD 与已知差异
 
 ---
 
