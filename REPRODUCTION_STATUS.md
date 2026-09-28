@@ -26,11 +26,11 @@
 | Fig.5                | ✅ 已生成   | Proposed训练/验证损失；当前100 epoch，验证损失用-val_rate代理 |
 | Fig.6                | ✅ 已生成   | Rate vs K                      |
 | Fig.7                | ✅ 已生成   | Baseline水平线 + GPT2/CNN曲线       |
-| Fig.8                | 🟡 部分完成 | Baseline水平线正确，GPT2/CNN需不同Rmin训练模型 |
+| Fig.8                | 🟡 部分完成 | GPT2 已多Rmin重训但幅度仅0.07（论文0.73）；CNN未训完；形态仍近水平 |
 | Fig.9                | ✅ 已生成   | Rate vs P                      |
 | Table I              | ✅ 已完成   | 分类准确率                          |
 | Table II             | ✅ 已完成   | 参数量/时间                         |
-| Table III            | ⏳ 待完成   | gamma2敏感度                      |
+| Table III            | ⏳ 待完成   | γ2敏感度（本轮未开始，已暂停）              |
 | Transformer baseline | ⏳ 待完成   | 尚未实现                           |
 
 ---
@@ -420,6 +420,15 @@ python plot_results.py
 - **Capacity、GPT2/CNN 主趋势、Fig.7 Baseline 水平线**：可写入报告，标注 WARN 级数值偏差  
 - **不能声称**与论文数值完全一致；Table I@0dB 与 Fig.8 形态仍不达标  
 - 若要继续逼近论文：需 CSI 噪声增强训练（Table I）与多 Rmin 重训（Fig.8），属于补实验而非改协议  
+
+### Fig.8 多 Rmin 重训（2026-09-28，已暂停）
+
+- GPT2 已完成 Rmin=0/0.2/0.4/0.6/0.8/1.0（100 epoch）
+- Test rate：31.89 / 31.94 / 31.87 / 31.92 / 31.92 / 31.87 → 幅度 **0.07**（论文 0.73）
+- 诊断：Rmin=0.6 时仅 0.09% 用户低于门限，惩罚几乎不绑定
+- CNN 多 Rmin **未训完**（本轮暂停）
+- **未**改 Rmin/loss 定义硬拉曲线
+- `⚠️` Fig.8 形态仍未对上论文
 
 ---
 
