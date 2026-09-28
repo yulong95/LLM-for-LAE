@@ -26,11 +26,11 @@
 | Fig.5                | ✅ 已生成   | Proposed训练/验证损失；当前100 epoch，验证损失用-val_rate代理 |
 | Fig.6                | ✅ 已生成   | Rate vs K                      |
 | Fig.7                | ✅ 已生成   | Baseline水平线 + GPT2/CNN曲线       |
-| Fig.8                | 🟡 部分完成 | GPT2 已多Rmin重训但幅度仅0.07（论文0.73）；CNN未训完；形态仍近水平 |
+| Fig.8                | 🟡 部分完成 | GPT2已多Rmin重训但幅度0.07（论文0.73）；CNN未训完；**决定不再硬拉形态** |
 | Fig.9                | ✅ 已生成   | Rate vs P                      |
-| Table I              | ✅ 已完成   | 分类准确率                          |
+| Table I              | 🟡 部分完成 | 高SNR可用；0dB偏低（统一AWGN后更诚实） |
 | Table II             | ✅ 已完成   | 参数量/时间                         |
-| Table III            | ⏳ 待完成   | γ2敏感度（本轮未开始，已暂停）              |
+| Table III            | ⏸️ 已放弃   | γ2扫描不再继续（性价比低）              |
 | Transformer baseline | ⏳ 待完成   | 尚未实现                           |
 
 ---
