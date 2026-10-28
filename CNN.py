@@ -21,6 +21,7 @@ N, K = 256, 10
 parser = argparse.ArgumentParser()
 parser.add_argument('--gamma', type=float, default=0.4, help='Near-field power ratio constraint (alpha_c). Paper Fig.6/8/9 uses 0.4')
 parser.add_argument('--gamma2', type=float, default=5.0, help='Classification loss weight')
+parser.add_argument('--rmin', type=float, default=0.6, help='Minimum rate constraint (Rmin). Paper Fig.8 sweeps this.')
 parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--batch_size', type=int, default=100)
@@ -30,11 +31,13 @@ args = parser.parse_args()
 data_root = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\Data_user.mat"
 base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output"
 
-# Output dir naming (paper default: gamma=0.4, gamma2=5.0)
+# Output dir naming (paper default: gamma=0.4, gamma2=5.0, rmin=0.6)
 if args.gamma != 0.4:
     dir_tag = f"CNN_gamma{args.gamma:.1f}"
 elif args.gamma2 != 5.0:
     dir_tag = f"CNN_gamma2_{args.gamma2}"
+elif args.rmin != 0.6:
+    dir_tag = f"CNN_rmin{args.rmin:.1f}"
 else:
     dir_tag = "CNN"
 output_dir = os.path.join(base_output, f"{dir_tag}_{datetime.datetime.now().strftime('%m.%d_%H-%M-%S')}")
@@ -211,7 +214,7 @@ if __name__ == "__main__":
     test_set = ChannelDataset(data_root, is_train=2)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=0.0001)
-    criterion_train = MULoss().to(device)
+    criterion_train = MULoss(rmin=args.rmin).to(device)
     criterion_test = RateCal().to(device)
     criterion_train_cl = nn.MSELoss().to(device)
     criterion_test_cl = ACCLoss().to(device)

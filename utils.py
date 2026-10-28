@@ -30,8 +30,10 @@ class RateCal(nn.Module):
         return Rsum
 
 class MULoss(nn.Module):
-    def __init__(self):
+    def __init__(self, rmin=0.6, gamma1=10.0):
         super(MULoss, self).__init__()
+        self.rmin = rmin
+        self.gamma1 = gamma1
 
     def forward(self,p_hat,lamda_hat,muchannel):
         sigma = 10**(-20/10)
@@ -39,7 +41,7 @@ class MULoss(nn.Module):
         K = p_hat.shape[1]
         precoding_mat = pq2V(p_hat,lamda_hat,muchannel,sigma,muh_dimen)
         Rsum,single_rate = SMR_loss(precoding_mat,muchannel,sigma)
-        penalty = F.relu(0.6 - single_rate)*10.0
+        penalty = F.relu(self.rmin - single_rate)*self.gamma1
         penalty = torch.sum(penalty,dim=1)
         penalty_loss = torch.mean(penalty)
         Rsum_loss = -1.0*torch.mean(Rsum)
