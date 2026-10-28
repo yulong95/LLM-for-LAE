@@ -27,6 +27,10 @@ parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--batch_size', type=int, default=100)
 parser.add_argument('--csi_snr', type=float, default=None,
                     help='Train-time CSI SNR dB (Table I protocol). None=pure CSI (default).')
+parser.add_argument('--sup_wmmse', action='store_true',
+                    help='[31] supervised: MSE to WMMSE (p,λ) labels + cl; 不用 MULoss')
+parser.add_argument('--wmmse_labels', type=str,
+                    default=r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output\wmmse_labels.pt")
 args = parser.parse_args()
 
 
@@ -45,7 +49,9 @@ data_root = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\Dat
 base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output"
 
 # Output dir naming (paper default: gamma=0.4, gamma2=5.0, rmin=0.6)
-if args.csi_snr is not None:
+if args.sup_wmmse:
+    dir_tag = "CNN_supwmmse"
+elif args.csi_snr is not None:
     dir_tag = f"CNN_csi{args.csi_snr:.0f}"
 elif args.gamma != 0.4:
     dir_tag = f"CNN_gamma{args.gamma:.1f}"
@@ -61,6 +67,25 @@ os.makedirs(output_dir, exist_ok=True)
 # ============= Model =============#
 model = CNN_pre(N, K, args.gamma)
 model.to(device)
+
+# [31] supervised labels (optional)
+WMMSE_LAB = None
+if args.sup_wmmse:
+    WMMSE_LAB = torch.load(args.wmmse_labels, map_location='cpu')
+    print(f"Loaded WMMSE labels: {list(WMMSE_LAB.keys())} train_p={tuple(WMMSE_LAB['train']['p'].shape)}")
+
+
+class IndexedDataset(torch.utils.data.Dataset):
+    def __init__(self, ds):
+        self.ds = ds
+
+    def __getitem__(self, i):
+        d = self.ds[i]
+        d['index'] = i
+        return d
+
+    def __len__(self):
+        return len(self.ds)
 
 
 # ============= Train function =============#
@@ -106,7 +131,14 @@ def train(training_loader, validate_loader, test_loader):
 
             p_hat, lamda_hat, cl_hat = model(H0, cl, random_int, mean, std)
             H = rearrange(H, 'n H W k -> n k (W H)')
-            loss_pre = criterion_train(p_hat, lamda_hat, H)
+            if args.sup_wmmse:
+                # [31] supervised: MSE to WMMSE (p,λ) + classification
+                idx = data['index']
+                p_lab = WMMSE_LAB['train']['p'][idx].to(device)
+                lam_lab = WMMSE_LAB['train']['lam'][idx].to(device)
+                loss_pre = criterion_train_cl(p_hat, p_lab) + criterion_train_cl(lamda_hat, lam_lab)
+            else:
+                loss_pre = criterion_train(p_hat, lamda_hat, H)
             loss_cl = criterion_train_cl(cl, torch.unsqueeze(cl_hat, dim=2))
             loss = loss_pre + loss_cl * args.gamma2
             epoch_train_loss.append(loss.item())
@@ -231,6 +263,10 @@ if __name__ == "__main__":
     train_set = ChannelDataset(data_root, is_train=1)
     validate_set = ChannelDataset(data_root, is_train=0)
     test_set = ChannelDataset(data_root, is_train=2)
+    if args.sup_wmmse:
+        train_set = IndexedDataset(train_set)
+        validate_set = IndexedDataset(validate_set)
+        test_set = IndexedDataset(test_set)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=0.0001)
     criterion_train = MULoss(rmin=args.rmin).to(device)

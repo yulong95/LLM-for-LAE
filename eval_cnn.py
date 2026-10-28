@@ -23,11 +23,18 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--quick', action='store_true', help='Skip timing measurement')
 parser.add_argument('--gamma', type=float, default=0.4,
                     help='alpha_c constraint (must match training gamma). Paper Fig.6/8/9 uses 0.4')
+parser.add_argument('--sup_wmmse', action='store_true', help='Load CNN_supwmmse run ( [31] supervised)')
 args = parser.parse_args()
 
 
 # ===================== Model loading =====================#
 def find_latest_run(gamma=0.4):
+    if args.sup_wmmse:
+        runs = sorted(glob.glob(os.path.join(base_output, "CNN_supwmmse_*")))
+        valid = [r for r in runs if glob.glob(os.path.join(r, '*.pth'))]
+        if not valid:
+            raise FileNotFoundError('no CNN_supwmmse run; train with --sup_wmmse')
+        return valid[-1]
     runs = sorted(glob.glob(os.path.join(base_output, "CNN_*")))
     if gamma == 0.4:
         # Paper-default run: no gamma/rmin tag
@@ -36,7 +43,7 @@ def find_latest_run(gamma=0.4):
             name = os.path.basename(r).lower()
             if not glob.glob(os.path.join(r, '*.pth')):
                 continue
-            if 'gamma' in name or 'rmin' in name or 'csi' in name:
+            if 'gamma' in name or 'rmin' in name or 'csi' in name or 'supwmmse' in name:
                 continue
             valid.append(r)
     else:
@@ -195,7 +202,8 @@ def main():
     results['cnn_fig9'] = fig9
 
     # Save
-    out_path = os.path.join(base_output, 'eval_cnn_results.json')
+    out_name = 'eval_cnn_supwmmse_results.json' if args.sup_wmmse else 'eval_cnn_results.json'
+    out_path = os.path.join(base_output, out_name)
     with open(out_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to {out_path}")

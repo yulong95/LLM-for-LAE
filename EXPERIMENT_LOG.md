@@ -629,3 +629,17 @@ Fig.6~9 已绘制 Transformer 曲线（橙色 `v`）。
 说明：`SMR_loss` 用 `h^T v`，`pq2V` 存 `conj(w)`，与 v0 一致。
 
 ---
+
+---
+
+## [31] 监督 CNN（2026-10-28，有源依据的尝试）
+
+依据：Xia [31] WMMSE 功率标签 + 公式恢复；[30] 有 p_wmmse/lamda_wmmse。
+
+实现：`gen_wmmse_labels.py` + `CNN.py --sup_wmmse`（MSE 拟合 (p,λ)+cl，不用 MULoss）。
+Run: `CNN_supwmmse_10.28_20-43-44`。
+
+结果：supervised rate=31.86 / acc=79.7% vs unsupervised 31.87 / 79.3% vs GPT2 31.92。
+GPT2−CNN 仍 ≈+0.06。监督 WMMSE 标签（本实现接近最优 rate≈32.5）**未**拉开论文 +0.5 间隙。
+
+`⚠️`：若论文用更弱的 WMMSE 局部解作标签，分布可能不同。禁止为此改恢复。
