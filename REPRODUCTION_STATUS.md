@@ -256,6 +256,8 @@ GPT2/CNN：需要不同 Rmin 训练的模型才能产生下降曲线。
 - ACCLoss中的 `cl` 保持 `(B, K, 1)`
 - 不得错误 `squeeze`
 - GPT2评估时避免内部/外部重复加噪声
+- 恢复必须 `pq2V`（公式 17）；禁止 A-mix 等自造恢复
+- Table I 加噪重训用 `--csi_snr`（run 名含 `csi`，不与论文默认 ckpt 混淆）
 
 ### Baseline
 

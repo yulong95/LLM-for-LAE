@@ -38,7 +38,7 @@ def find_latest_run(gamma=0.4):
             name = os.path.basename(r).lower()
             if not glob.glob(os.path.join(r, '*.pth')):
                 continue
-            if 'gamma' in name or 'rmin' in name:
+            if 'gamma' in name or 'rmin' in name or 'csi' in name:
                 continue
             valid.append(r)
     else:

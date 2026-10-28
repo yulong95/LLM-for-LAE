@@ -29,14 +29,29 @@ parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--batch_size', type=int, default=100)
 parser.add_argument('--depth', type=int, default=5, help='Transformer encoder depth')
 parser.add_argument('--mlp_dim', type=int, default=1536)
+parser.add_argument('--csi_snr', type=float, default=None,
+                    help='Train-time CSI SNR dB (same AWGN as Table I eval). None=pure CSI (default).')
 args = parser.parse_args()
+
+
+def add_csi_awgn(H_flat, snr_db):
+    """Same protocol as eval_gpt2 / Table I: complex SNR = snr_db on CSI."""
+    H_4d = H_flat.reshape(*H_flat.shape[:-1], H_flat.shape[-1] // 2, 2)
+    H_complex = torch.complex(H_4d[..., 0], H_4d[..., 1])
+    p_sig = torch.mean(torch.abs(H_complex) ** 2)
+    noise_cplx_power = p_sig / (10 ** (snr_db / 10.0))
+    n_complex = (torch.randn_like(H_complex) + 1j * torch.randn_like(H_complex)) * torch.sqrt(noise_cplx_power / 2.0)
+    noise = torch.stack([n_complex.real, n_complex.imag], dim=-1).reshape_as(H_flat)
+    return H_flat + noise
 
 # ============= Paths =============#
 data_root = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\Data_user.mat"
 base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output"
 
 # Output dir naming (paper default: gamma=0.4, gamma2=5.0, rmin=0.6)
-if args.gamma != 0.4:
+if args.csi_snr is not None:
+    dir_tag = f"Transformer_csi{args.csi_snr:.0f}"
+elif args.gamma != 0.4:
     dir_tag = f"Transformer_gamma{args.gamma:.1f}"
 elif args.gamma2 != 5.0:
     dir_tag = f"Transformer_gamma2_{args.gamma2}"
@@ -73,6 +88,8 @@ def train(training_loader, validate_loader, test_loader):
             optimizer.zero_grad()
             H = data['H'].to(device, non_blocking=True)
             H = rearrange(H, 'n W H a -> n W (H a)')
+            if args.csi_snr is not None:
+                H = add_csi_awgn(H, args.csi_snr)
             cl = data['cl'].to(device, non_blocking=True)
             p_hat, lamda_hat, cl_hat = model(H, cl)
             loss_pre = criterion_train(p_hat, lamda_hat, H)
