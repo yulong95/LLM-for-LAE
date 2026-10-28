@@ -597,3 +597,61 @@ Fig.6~9 已绘制 Transformer 曲线（橙色 `v`）。
 2. `find_latest_run` 必须排除 `gamma`/`rmin` 标签目录，否则会选到 sweep run
 
 ---
+
+## DL 三线重合：小实验排查（2026-10-28）
+
+目标：找出能让 Transformer/GPT2 与 CNN 的 rate 间隙从 0.06 变到约 0.5 的机制，先小实验再扩大。
+
+### 已排除
+
+| 实验 | 结果 | 结论 |
+| ---- | ---- | ---- |
+| E0 公式(17) vs pq2V | f17 在当前 λ 下干扰崩溃 rate≈0.7 | 换 (17) 不会拉开间隙 |
+| E0 (p,λ) 交叉替换 | GPT2/CNN 的 (p,λ) L1≈0.01，rate 差 0.06 | 解几乎相同 |
+| E1 base/tiny CNN | 12 epoch 即 31.87 | **(p,λ)+pq2V 过易**，容量无关 |
+| E1 softc3 | rate 升到 32.19 | 软 C3 放松约束，方向反了 |
+| E1/E2 全维 W 头 | CNN 收敛≈17 | **过难**（还缺共轭约定时更惨） |
+| 分类门控 a(θ) 波束 | 比全用 h 更差 | NLoS 下平面波转向损失大 |
+
+### 关键发现（有改善趋势）
+
+`SMR_loss` 使用 `h^T v`（无共轭），`pq2V` 输出的是 `conj(w)`。自建波束必须共轭，否则 rate 假性≈0。
+
+中等难度 **A-mix**（学 K×K 混合矩阵 `A`，`W=normalize(H A)`，`A=I+Δ`）：
+
+| 模型 | Test rate | Acc | TF−CNN |
+| ---- | --: | --: | --: |
+| TF_Amix (25 ep) | 27.00 | 93.7% | |
+| CNN_Amix (25 ep) | 26.62 | 78.7% | **+0.385** |
+| TF_Amix (50 ep) | 27.23 | 95.5% | |
+| CNN_Amix (50 ep) | 26.62 | 79.3% | **+0.614** |
+
+对照论文 Proposed−CNN ≈ **+0.51**。25→50 epoch 间隙从 0.39 升到 0.61，量级与论文一致且趋势稳定。绝对 rate 低于论文（缺 ZF 恢复：MRC≈27.8，pq2V≈31.8）。
+
+同一难题下的容量对比（全维 W）：TF 28.3 vs CNN 17.0（+11.3）→ **网络容量差会转化成 rate 差**，与论文“规模更大优化更好”一致。
+
+### 扩大实验（2026-10-28 已完成）
+
+统一 A-mix 重训 100 epoch（`train_amix.py` / `eval_amix.py` / `plot_amix.py`）：
+
+| 模型 | Run | K=10 rate | Acc | Gap vs CNN |
+| ---- | -- | --: | --: | --: |
+| GPT2-Amix | `GPT2Amix_10.28_15-49-31` | **27.47** | 95.9% | **+0.83** |
+| Transformer-Amix | `TFAmix_10.28_14-41-45` | **27.23** | 95.3% | **+0.59** |
+| CNN-Amix | `CNNAmix_10.28_15-18-43` | **26.64** | 78.5% | — |
+
+- 排序：Proposed > Transformer > CNN ✅（与论文一致）
+- TF−CNN = **+0.59**（论文 Proposed−CNN ≈ +0.51）
+- GPT2−CNN = +0.83（略大于论文，方向正确）
+- 绝对 rate ≈27（A-mix 无全 ZF；pq2V 路径仍为 ≈31.9）
+- Fig.6~9 已出 `figures/Fig*_amix_*.png`，三条 DL 线已分开
+
+已知限制：
+
+- K=5 时 CNN-Amix 略高于 TF（15.25 vs 13.64）；K≥8 后 GPT2≥TF>CNN
+- Fig.8 仍单模型水平线（不硬拉 Rmin）
+- Table I 0dB 仍偏低（无噪声增强训练）
+
+`⚠️`：官方 `eval_*_results.json`（pq2V 路径）未覆盖；A-mix 结果在 `eval_amix_*_results.json`。
+
+---

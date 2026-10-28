@@ -1,0 +1,10 @@
+TABLE I (A-mix): Classification Accuracy vs SNR
+============================================================
+Scheme                      0dB      5dB     10dB     15dB     20dB
+Proposed (GPT2-Amix)     0.7544   0.9027   0.9469   0.9555   0.9560
+Transformer-Amix         0.7446   0.9079   0.9426   0.9504   0.9518
+CNN-Amix                 0.6150   0.7407   0.7738   0.7827   0.7848
+
+K=10 RATE GAP (A-mix)
+GPT2=27.4704  TF=27.2306  CNN=26.6438
+GPT2-CNN=+0.8266  TF-CNN=+0.5869  (paper Proposed-CNN≈+0.51)

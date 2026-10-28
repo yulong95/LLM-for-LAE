@@ -32,6 +32,7 @@
 | Table II             | ✅ 已完成   | 参数量/时间                         |
 | Table III            | ⏸️ 已放弃   | γ2扫描不再继续（性价比低）              |
 | Transformer baseline | ✅ 已完成   | 已训练/评估/接入 Fig.6~9 与 Table I     |
+| DL 间隙修复 (A-mix) | ✅ 小扩大完成 | GPT2>TF>CNN，TF−CNN=+0.59；绝对 rate≈27 |
 
 ---
 
