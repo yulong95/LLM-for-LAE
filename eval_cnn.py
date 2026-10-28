@@ -24,11 +24,14 @@ parser.add_argument('--quick', action='store_true', help='Skip timing measuremen
 parser.add_argument('--gamma', type=float, default=0.4,
                     help='alpha_c constraint (must match training gamma). Paper Fig.6/8/9 uses 0.4')
 parser.add_argument('--sup_wmmse', action='store_true', help='Load CNN_supwmmse run ( [31] supervised)')
+parser.add_argument('--run', type=str, default=None, help='Explicit checkpoint dir')
 args = parser.parse_args()
 
 
 # ===================== Model loading =====================#
 def find_latest_run(gamma=0.4):
+    if args.run:
+        return args.run
     if args.sup_wmmse:
         runs = sorted(glob.glob(os.path.join(base_output, "CNN_supwmmse_*")))
         valid = [r for r in runs if glob.glob(os.path.join(r, '*.pth'))]
@@ -202,7 +205,12 @@ def main():
     results['cnn_fig9'] = fig9
 
     # Save
-    out_name = 'eval_cnn_supwmmse_results.json' if args.sup_wmmse else 'eval_cnn_results.json'
+    if args.run:
+        out_name = 'eval_cnn_custom_results.json'
+    elif args.sup_wmmse:
+        out_name = 'eval_cnn_supwmmse_results.json'
+    else:
+        out_name = 'eval_cnn_results.json'
     out_path = os.path.join(base_output, out_name)
     with open(out_path, 'w') as f:
         json.dump(results, f, indent=2)

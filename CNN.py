@@ -31,6 +31,8 @@ parser.add_argument('--sup_wmmse', action='store_true',
                     help='[31] supervised: MSE to WMMSE (p,λ) labels + cl; 不用 MULoss')
 parser.add_argument('--wmmse_labels', type=str,
                     default=r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output\wmmse_labels.pt")
+parser.add_argument('--finetune_from', type=str, default=None,
+                    help='[31] stage-2: load ckpt and fine-tune with MULoss (rate) + cl')
 args = parser.parse_args()
 
 
@@ -49,7 +51,9 @@ data_root = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\Dat
 base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\output"
 
 # Output dir naming (paper default: gamma=0.4, gamma2=5.0, rmin=0.6)
-if args.sup_wmmse:
+if args.finetune_from:
+    dir_tag = "CNN_ftwmmse"
+elif args.sup_wmmse:
     dir_tag = "CNN_supwmmse"
 elif args.csi_snr is not None:
     dir_tag = f"CNN_csi{args.csi_snr:.0f}"
@@ -68,7 +72,20 @@ os.makedirs(output_dir, exist_ok=True)
 model = CNN_pre(N, K, args.gamma)
 model.to(device)
 
-# [31] supervised labels (optional)
+# Stage-2 fine-tune from supervised ckpt ([30] phase-2 / [31] 两阶段)
+if args.finetune_from:
+    ck = args.finetune_from
+    if os.path.isdir(ck):
+        cands = sorted(glob.glob(os.path.join(ck, '*.pth')), key=os.path.getmtime)
+        if not cands:
+            raise FileNotFoundError(f'no .pth in {ck}')
+        ck = cands[-1]
+    model.load_state_dict(torch.load(ck, map_location=device, weights_only=True))
+    print(f"Fine-tune init from {ck}")
+    # stage-2: MULoss，不用 WMMSE 标签
+    args.sup_wmmse = False
+
+# [31] supervised labels (optional, stage-1)
 WMMSE_LAB = None
 if args.sup_wmmse:
     WMMSE_LAB = torch.load(args.wmmse_labels, map_location='cpu')
