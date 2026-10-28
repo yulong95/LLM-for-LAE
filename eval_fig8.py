@@ -11,6 +11,7 @@ import numpy as np
 from einops import rearrange
 from models.gpt2_model_all import Gpt2Model
 from models.baseline_CNN import CNN_pre
+from models.transformer_model import TransformerPre
 from data import ChannelDataset
 from utils import ACCLoss, RateCal, pq2V
 
@@ -87,6 +88,37 @@ def find_cnn_rmin_checkpoints():
             print(f"CNN default(rmin=0.6) run: {valid[-1]}")
 
     # rmin sweep models
+    for run_dir in runs:
+        basename = os.path.basename(run_dir)
+        if 'rmin' in basename:
+            try:
+                rmin_val = float(basename.split('rmin')[1].split('_')[0])
+                ckpts = sorted(glob.glob(os.path.join(run_dir, '*.pth')), key=os.path.getmtime)
+                if ckpts:
+                    checkpoints[rmin_val] = ckpts[-1]
+            except (ValueError, IndexError):
+                pass
+    return checkpoints
+
+
+def find_transformer_rmin_checkpoints():
+    """Find Transformer checkpoints trained with different rmin values."""
+    checkpoints = {}
+    runs = sorted(glob.glob(os.path.join(base_output, "Transformer_*")))
+    valid = []
+    for r in runs:
+        name = os.path.basename(r).lower()
+        if not glob.glob(os.path.join(r, '*.pth')):
+            continue
+        if 'gamma' in name or 'rmin' in name:
+            continue
+        valid.append(r)
+    if valid:
+        ckpts = sorted(glob.glob(os.path.join(valid[-1], '*.pth')), key=os.path.getmtime)
+        if ckpts:
+            checkpoints[0.6] = ckpts[-1]
+            print(f"Transformer default(rmin=0.6) run: {valid[-1]}")
+
     for run_dir in runs:
         basename = os.path.basename(run_dir)
         if 'rmin' in basename:
@@ -178,6 +210,22 @@ def main():
         cnn_fig8[str(rmin_val)] = {'rate': r, 'acc': a}
         print(f"  Rmin={rmin_val:.1f}: rate={r:.4f} acc={a:.4f}")
     results['cnn_fig8'] = cnn_fig8
+
+    # ===== Transformer Rmin sweep =====
+    print("\n===== Transformer: Rate vs Rmin =====")
+    tf_ckpts = find_transformer_rmin_checkpoints()
+    print(f"  Found checkpoints for rmin: {sorted(tf_ckpts.keys())}")
+
+    transformer_fig8 = {}
+    for rmin_val, ckpt_path in sorted(tf_ckpts.items()):
+        model = TransformerPre(Nt=N, K=K, gamma=0.4)
+        model.to(device)
+        model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
+        model.eval()
+        r, a = eval_gpt2(model, test_loader)  # same I/O as GPT2
+        transformer_fig8[str(rmin_val)] = {'rate': r, 'acc': a}
+        print(f"  Rmin={rmin_val:.1f}: rate={r:.4f} acc={a:.4f}")
+    results['transformer_fig8'] = transformer_fig8
 
     # Save
     out_path = os.path.join(base_output, 'eval_fig8_results.json')

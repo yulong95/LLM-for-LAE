@@ -8,6 +8,7 @@ import numpy as np
 from einops import rearrange
 from models.gpt2_model_all import Gpt2Model
 from models.baseline_CNN import CNN_pre
+from models.transformer_model import TransformerPre
 from data import ChannelDataset
 from utils import ACCLoss, RateCal, pq2V
 
@@ -65,6 +66,26 @@ def find_cnn_checkpoint():
     run_dir = valid[-1]
     ckpts = sorted(glob.glob(os.path.join(run_dir, '*.pth')), key=os.path.getmtime)
     print(f"CNN checkpoint run: {run_dir}")
+    return run_dir, ckpts[-1]
+
+
+def find_transformer_checkpoint():
+    runs = sorted(glob.glob(os.path.join(base_output, "Transformer_*")))
+    valid = []
+    for r in runs:
+        name = os.path.basename(r).lower()
+        if not glob.glob(os.path.join(r, '*.pth')):
+            continue
+        if 'gamma' in name or 'rmin' in name:
+            continue
+        valid.append(r)
+    if not valid:
+        valid = [r for r in runs if glob.glob(os.path.join(r, '*.pth'))]
+    if not valid:
+        raise FileNotFoundError("No Transformer checkpoint found")
+    run_dir = valid[-1]
+    ckpts = sorted(glob.glob(os.path.join(run_dir, '*.pth')), key=os.path.getmtime)
+    print(f"Transformer checkpoint run: {run_dir}")
     return run_dir, ckpts[-1]
 
 
@@ -131,6 +152,28 @@ def eval_cnn_at_gamma(model, loader, gamma, sigma2=0.01):
     return np.mean(rates), np.mean(accs), np.mean(alpha_Ns)
 
 
+def eval_transformer_at_gamma(model, loader, gamma, sigma2=0.01):
+    """Evaluate Transformer with a specific gamma (alpha_c) constraint."""
+    model.gamma = gamma
+    criterion_rate = RateCal().to(device)
+    criterion_acc = ACCLoss().to(device)
+    rates, accs, alpha_Ns = [], [], []
+    with torch.no_grad():
+        for data in loader:
+            H = data['H'].to(device, non_blocking=True)
+            cl = data['cl'].to(device, non_blocking=True)
+            H = rearrange(H, 'n W H a -> n W (H a)')
+            p_hat, lamda_hat, cl_hat = model(H, cl)
+            r = criterion_rate(p_hat, lamda_hat, H).item()
+            a = criterion_acc(cl, torch.unsqueeze(cl_hat, dim=2)).item()
+            V = pq2V(p_hat, lamda_hat, H, sigma2, N)
+            alpha_N = compute_alpha_N(V, cl, sigma2)
+            rates.append(r)
+            accs.append(a)
+            alpha_Ns.append(alpha_N)
+    return np.mean(rates), np.mean(accs), np.mean(alpha_Ns)
+
+
 def main():
     results = {}
     test_loader = load_test_set()
@@ -169,6 +212,24 @@ def main():
         cnn_fig7[str(gamma)] = {'rate': r, 'acc': a, 'alpha_N': alpha_N}
         print(f"  gamma={gamma:.1f}: rate={r:.4f} acc={a:.4f} alpha_N={alpha_N:.4f}")
     results['cnn_fig7'] = cnn_fig7
+
+    # ===== Transformer gamma sweep =====
+    print("\n===== Transformer: Rate vs alpha_c (gamma) =====")
+    try:
+        tf_run_dir, tf_ckpt = find_transformer_checkpoint()
+        print(f"  Checkpoint: {os.path.basename(tf_run_dir)}/{os.path.basename(tf_ckpt)}")
+        tf_model = TransformerPre(Nt=N, K=K, gamma=0.4)
+        tf_model.to(device)
+        tf_model.load_state_dict(torch.load(tf_ckpt, map_location=device, weights_only=True))
+        tf_model.eval()
+        transformer_fig7 = {}
+        for gamma in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
+            r, a, alpha_N = eval_transformer_at_gamma(tf_model, test_loader, gamma)
+            transformer_fig7[str(gamma)] = {'rate': r, 'acc': a, 'alpha_N': alpha_N}
+            print(f"  gamma={gamma:.1f}: rate={r:.4f} acc={a:.4f} alpha_N={alpha_N:.4f}")
+        results['transformer_fig7'] = transformer_fig7
+    except FileNotFoundError as e:
+        print(f"  [SKIP] {e}")
 
     # Save
     out_path = os.path.join(base_output, 'eval_fig7_results.json')

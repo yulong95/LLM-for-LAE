@@ -4,11 +4,11 @@ No fallback, no hard-coded paper values. Data missing → skip with warning.
 
 Fig.4: Normalized beamforming gain vs distance (theoretical, Lemma 1 / ENFR)
 Fig.5: Training curves of proposed model (from train_log.csv)
-Fig.6: Rate vs K (from eval_gpt2_results.json + eval_cnn_results.json + eval_baselines_results.json)
+Fig.6: Rate vs K (from eval_gpt2/transformer/cnn_results.json + eval_baselines_results.json)
 Fig.7: Rate vs alpha_c (from eval_fig7_results.json + eval_baselines_results.json)
 Fig.8: Rate vs Rmin (from eval_fig8_results.json + eval_baselines_results.json)
-Fig.9: Rate vs P (from eval_gpt2_results.json + eval_cnn_results.json + eval_baselines_results.json)
-Table I: Accuracy vs SNR (from eval_gpt2_results.json + eval_cnn_results.json)
+Fig.9: Rate vs P (from eval_gpt2/transformer/cnn_results.json + eval_baselines_results.json)
+Table I: Accuracy vs SNR (from eval_gpt2/transformer/cnn_results.json)
 """
 import os, glob, json, sys
 import numpy as np
@@ -199,12 +199,13 @@ def plot_training_curves():
 # ==================== Figure 6: Rate vs K ====================
 def plot_rate_vs_K():
     gpt2_data = load_json('eval_gpt2_results.json')
+    tf_data = load_json('eval_transformer_results.json')
     cnn_data = load_json('eval_cnn_results.json')
     bl = load_json('eval_baselines_results.json')
 
     K = np.array([5, 6, 7, 8, 9, 10])
-    markers = {'Capacity': 's', 'Proposed': '^', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
-    colors = {'Capacity': 'm', 'Proposed': 'b', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
+    markers = {'Capacity': 's', 'Proposed': '^', 'Transformer': 'v', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
+    colors = {'Capacity': 'm', 'Proposed': 'b', 'Transformer': 'darkorange', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -220,6 +221,12 @@ def plot_rate_vs_K():
         ax.plot(K, vals, marker='^', color='b', linestyle='-', label='Proposed (GPT2)', linewidth=1.5, markersize=10)
     else:
         print('  [SKIP] GPT2 data unavailable for Fig.6')
+
+    if tf_data and 'k_sweep' in tf_data:
+        vals = [tf_data['k_sweep'][str(k)]['transformer_rate'] for k in K]
+        ax.plot(K, vals, marker='v', color='darkorange', linestyle='-', label='Transformer', linewidth=1.5, markersize=10)
+    else:
+        print('  [SKIP] Transformer data unavailable for Fig.6')
 
     if cnn_data and 'k_sweep' in cnn_data:
         vals = [cnn_data['k_sweep'][str(k)]['cnn_rate'] for k in K]
@@ -242,12 +249,13 @@ def plot_rate_vs_K():
 # ==================== Figure 9: Rate vs P ====================
 def plot_rate_vs_power():
     gpt2_data = load_json('eval_gpt2_results.json')
+    tf_data = load_json('eval_transformer_results.json')
     cnn_data = load_json('eval_cnn_results.json')
     bl = load_json('eval_baselines_results.json')
 
     P_dBW = np.array([-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10])
-    markers = {'Capacity': 's', 'Proposed': '^', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
-    colors = {'Capacity': 'm', 'Proposed': 'b', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
+    markers = {'Capacity': 's', 'Proposed': '^', 'Transformer': 'v', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
+    colors = {'Capacity': 'm', 'Proposed': 'b', 'Transformer': 'darkorange', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -263,6 +271,12 @@ def plot_rate_vs_power():
         ax.plot(P_dBW, vals, marker='^', color='b', linestyle='-', label='Proposed (GPT2)', linewidth=1.5, markersize=10)
     else:
         print('  [SKIP] GPT2 data unavailable for Fig.9')
+
+    if tf_data and 'fig9' in tf_data:
+        vals = [tf_data['fig9'][str(p)] for p in P_dBW]
+        ax.plot(P_dBW, vals, marker='v', color='darkorange', linestyle='-', label='Transformer', linewidth=1.5, markersize=10)
+    else:
+        print('  [SKIP] Transformer data unavailable for Fig.9')
 
     if cnn_data and 'cnn_fig9' in cnn_data:
         vals = [cnn_data['cnn_fig9'][str(p)] for p in P_dBW]
@@ -287,8 +301,8 @@ def plot_rate_vs_alpha():
     fig7_data = load_json('eval_fig7_results.json')
 
     alphas = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-    markers = {'Capacity': 's', 'Proposed': '^', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
-    colors = {'Capacity': 'm', 'Proposed': 'b', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
+    markers = {'Capacity': 's', 'Proposed': '^', 'Transformer': 'v', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
+    colors = {'Capacity': 'm', 'Proposed': 'b', 'Transformer': 'darkorange', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -303,6 +317,12 @@ def plot_rate_vs_alpha():
         gamma_vals = [str(a) for a in alphas]
         rates = [fig7_data['gpt2_fig7'][g]['rate'] for g in gamma_vals]
         ax.plot(alphas, rates, marker='^', color='b', linestyle='-', label='Proposed (GPT2)', linewidth=1.5, markersize=10)
+
+    # Transformer curve
+    if fig7_data and 'transformer_fig7' in fig7_data:
+        gamma_vals = [str(a) for a in alphas]
+        rates = [fig7_data['transformer_fig7'][g]['rate'] for g in gamma_vals]
+        ax.plot(alphas, rates, marker='v', color='darkorange', linestyle='-', label='Transformer', linewidth=1.5, markersize=10)
 
     # CNN curve
     if fig7_data and 'cnn_fig7' in fig7_data:
@@ -327,8 +347,8 @@ def plot_rate_vs_Rmin():
     fig8_data = load_json('eval_fig8_results.json')
 
     rmins = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
-    markers = {'Capacity': 's', 'Proposed': '^', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
-    colors = {'Capacity': 'm', 'Proposed': 'b', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
+    markers = {'Capacity': 's', 'Proposed': '^', 'Transformer': 'v', 'CNN': 'd', 'NF-NOMA': 'o', 'LDMA': 'p', 'SDMA': 'h'}
+    colors = {'Capacity': 'm', 'Proposed': 'b', 'Transformer': 'darkorange', 'CNN': 'c', 'NF-NOMA': 'r', 'LDMA': 'g', 'SDMA': 'y'}
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -346,6 +366,15 @@ def plot_rate_vs_Rmin():
             rates = [fig8_data['gpt2_fig8'][r]['rate'] for r in available]
             r_vals = [float(r) for r in available]
             ax.plot(r_vals, rates, marker='^', color='b', linestyle='-', label='Proposed (GPT2)', linewidth=1.5, markersize=10)
+
+    # Transformer curve
+    if fig8_data and 'transformer_fig8' in fig8_data:
+        rmin_strs = [str(r) for r in rmins]
+        available = [r for r in rmin_strs if r in fig8_data['transformer_fig8']]
+        if available:
+            rates = [fig8_data['transformer_fig8'][r]['rate'] for r in available]
+            r_vals = [float(r) for r in available]
+            ax.plot(r_vals, rates, marker='v', color='darkorange', linestyle='-', label='Transformer', linewidth=1.5, markersize=10)
 
     # CNN curve
     if fig8_data and 'cnn_fig8' in fig8_data:
@@ -387,6 +416,13 @@ def save_tables():
     else:
         lines.append(f'{"Proposed (GPT2)":<15} {"DATA UNAVAILABLE":>44}')
 
+    tf_data = load_json('eval_transformer_results.json')
+    if tf_data and 'snr_sweep' in tf_data:
+        vals = [tf_data['snr_sweep'][str(s)]['transformer_acc'] for s in [0, 5, 10, 15, 20]]
+        lines.append(f'{"Transformer":<15} {" ".join(f"{v:.4f}" for v in vals)}')
+    else:
+        lines.append(f'{"Transformer":<15} {"DATA UNAVAILABLE":>44}')
+
     if cnn_data and 'snr_sweep' in cnn_data:
         vals = [cnn_data['snr_sweep'][str(s)]['cnn_acc'] for s in [0, 5, 10, 15, 20]]
         lines.append(f'{"CNN":<15} {" ".join(f"{v:.4f}" for v in vals)}')
@@ -401,6 +437,8 @@ def save_tables():
     header = f'{"K":<5}'
     if gpt2_data and 'k_sweep' in gpt2_data:
         header += f' {"GPT2":>10}'
+    if tf_data and 'k_sweep' in tf_data:
+        header += f' {"Transformer":>12}'
     if cnn_data and 'k_sweep' in cnn_data:
         header += f' {"CNN":>10}'
     for name in bl_names:
@@ -411,6 +449,8 @@ def save_tables():
         row = f'{k:<5}'
         if gpt2_data and 'k_sweep' in gpt2_data:
             row += f' {gpt2_data["k_sweep"][str(k)]["gpt2_rate"]:>10.4f}'
+        if tf_data and 'k_sweep' in tf_data:
+            row += f' {tf_data["k_sweep"][str(k)]["transformer_rate"]:>12.4f}'
         if cnn_data and 'k_sweep' in cnn_data:
             row += f' {cnn_data["k_sweep"][str(k)]["cnn_rate"]:>10.4f}'
         if bl and 'k_sweep' in bl:

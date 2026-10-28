@@ -200,6 +200,7 @@ Paper = 26.68
 | 2026-09-03 | Table II   | 已完成   | ✅      |
 | 2026-09-20 | Fig.4      | 理论BF gain，ENFR≈[5.7,82.1]m | ✅ |
 | 2026-09-20 | Fig.5      | GPT2 train/val loss，100 epoch | ✅ |
+| 2026-10-28 | Transformer | 训练/评估/接入 Fig.6~9 + Table I | ✅ |
 
 ---
 
@@ -539,5 +540,60 @@ test 指标（两种选择相同）：
 - Fig.6/7/9 主数值仍为 WARN 级，约束正确
 - **结果尚未全部进入 OK 带**；剩余 BAD 项属实验完成度/模型能力，不是“再改一处评估代码就能正常”
 - 与论文冲突的算法定义**未改动**
+
+---
+
+## Transformer baseline（2026-10-28）
+
+### 论文定义
+
+> (3) Transformer，利用 Transformer 的序列到序列映射能力同时实现用户分类和多用户近场预编码。
+
+无 GPT-2/LLM 骨干；与 CNN 同属 DL 对比方法，但用注意力做 seq2seq。
+
+### 实现
+
+- 模型：`models/transformer_model.py` `TransformerPre`
+  - 输入 `(B,K,2N)`，LayerNorm + TransformerEncoder
+  - dim=512, depth=5, heads=8, dim_head=64, mlp_dim=1536
+  - 输出每用户 `(p,λ,cl)` + Sigmoid
+  - C3 功率投影与 `Gpt2Model`/`CNN_pre` **逐行一致**（不改约束含义）
+- 训练：`transformer_train.py`
+  - 同一 `Data_user.mat` / `ChannelDataset`
+  - 损失：`MULoss(rmin) + γ2·MSE`，默认 γ=0.4, γ2=5, rmin=0.6
+  - 按 val RateCal 选 `best.pth`
+- 评估：
+  - `eval_transformer.py` → K/SNR/P sweep
+  - `eval_fig7.py` 增加 `transformer_fig7`
+  - `eval_fig8.py` 增加 `transformer_fig8`
+  - `plot_results.py` Fig.6/7/8/9 与 Table I 增加 Transformer 曲线
+
+### 结果
+
+官方 run：`output/Transformer_10.28_10-22-12`（100 epoch, ~19 s/epoch）
+
+| 项 | 当前 | 论文 | 带 |
+| -- | ---- | ---- | -- |
+| Params | 13.13M / 13.13M | 13.15 / 13.15 | OK |
+| K=10 rate | 31.9239 | （无官方 rate） | — |
+| Acc clean | 95.96% | 20dB 97.32% | WARN |
+| Acc@0dB | 85.54% | 92.14% | BAD |
+| Acc@20dB | 95.91% | 97.32% | WARN |
+| Fig.7 α_c=0.4 | 31.92 | — | 趋势正确 |
+| Fig.9 P=0 | 31.92 | — | 趋势正确 |
+| Infer (batch=1) | 5.78 ms | 62.8 ms | 硬件/测量口径不同 |
+
+Fig.6~9 已绘制 Transformer 曲线（橙色 `v`）。
+
+### 未违背论文的做法
+
+- 未改 C3/MULoss/数据定义
+- 未为贴论文曲线手工改 rate
+- Fig.8 **未**做多 Rmin 硬拉（与 2026-09-28 决定一致），仅默认点
+
+### 踩坑
+
+1. 误启动多个 `transformer_train.py` 进程会抢写 output 目录 → 已清理，只保留官方 run
+2. `find_latest_run` 必须排除 `gamma`/`rmin` 标签目录，否则会选到 sweep run
 
 ---

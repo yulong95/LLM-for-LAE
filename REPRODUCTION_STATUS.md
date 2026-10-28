@@ -24,14 +24,14 @@
 | -------------------- | ------- | ------------------------------ |
 | Fig.4                | ✅ 已生成   | 理论归一化波束增益，ENFR边界≈5.7/82.1 m          |
 | Fig.5                | ✅ 已生成   | Proposed训练/验证损失；当前100 epoch，验证损失用-val_rate代理 |
-| Fig.6                | ✅ 已生成   | Rate vs K                      |
-| Fig.7                | ✅ 已生成   | Baseline水平线 + GPT2/CNN曲线       |
-| Fig.8                | 🟡 部分完成 | GPT2已多Rmin重训但幅度0.07（论文0.73）；CNN未训完；**决定不再硬拉形态** |
-| Fig.9                | ✅ 已生成   | Rate vs P                      |
+| Fig.6                | ✅ 已生成   | Rate vs K（含 Transformer）           |
+| Fig.7                | ✅ 已生成   | Baseline水平线 + GPT2/Transformer/CNN曲线 |
+| Fig.8                | 🟡 部分完成 | GPT2已多Rmin重训但幅度0.07（论文0.73）；CNN/Transformer仅单点；**决定不再硬拉形态** |
+| Fig.9                | ✅ 已生成   | Rate vs P（含 Transformer）           |
 | Table I              | 🟡 部分完成 | 高SNR可用；0dB偏低（统一AWGN后更诚实） |
 | Table II             | ✅ 已完成   | 参数量/时间                         |
 | Table III            | ⏸️ 已放弃   | γ2扫描不再继续（性价比低）              |
-| Transformer baseline | ⏳ 待完成   | 尚未实现                           |
+| Transformer baseline | ✅ 已完成   | 已训练/评估/接入 Fig.6~9 与 Table I     |
 
 ---
 
@@ -47,11 +47,14 @@
 | Model          | Spectral Efficiency | Classification Accuracy |          Paper |
 | -------------- | ------------------: | ----------------------: | -------------: |
 | GPT2           |               31.92 |                  95.84% |   31.10 / ~99% |
+| Transformer    |               31.92 |                  95.96% |      — / 97.3% |
 | CNN            |               31.87 |                  79.28% | 30.59 / ~82.9% |
 | Capacity (DPC) |               32.25 |                       — |          32.65 |
 | NF-NOMA        |               23.81 |                       — |          26.68 |
 | LDMA           |               23.38 |                       — |          25.02 |
 | SDMA           |               20.80 |                       — |          23.47 |
+
+> Transformer 无论文官方 rate 数值（Data.xlsx 未给出）；分类准确率为高 SNR 档（论文 20 dB = 97.32%）。
 
 > 上表是当前实现的最新已验证结果，不代表论文原始算法结果。
 
@@ -115,6 +118,43 @@ GPT2/CNN：需要不同 Rmin 训练的模型才能产生下降曲线。
 状态：
 
 ✅ 当前实现可用
+
+---
+
+### Transformer（DL 基线，2026-10-28 完成）
+
+论文定义：
+
+> 利用 Transformer 的序列到序列映射能力，同时实现用户分类和多用户近场预编码（无 LLM 骨干）。
+
+当前实现：
+
+- `models/transformer_model.py`：`TransformerPre`
+- 输入 `H:(B,K,2N)`，LayerNorm + TransformerEncoder（dim=512, depth=5, heads=8, mlp=1536）
+- 输出每用户 `(p, λ, cl)`，C3 投影与 GPT2/CNN **完全一致**
+- 训练：`transformer_train.py`，损失 `MULoss + γ2·MSE`，与 GPT2/CNN 同一数据与协议
+- 评估：`eval_transformer.py` → `eval_transformer_results.json`
+- Fig.7：`eval_fig7.py` 同 checkpoint 不同 γ
+- Fig.8：仅默认 rmin=0.6（与“不硬拉形态”决定一致）
+
+官方 run：
+
+`output/Transformer_10.28_10-22-12`
+
+当前结果：
+
+- Params：**13.13M / 13.13M**（论文 13.15 / 13.15）✅
+- K=10 rate：**31.92**（论文无官方 rate）
+- Acc（clean CSI）：**95.96%**（论文 20 dB 档 97.32%）
+- Table I：0 dB **85.54%** / 5 dB 94.06% / 10 dB 95.61% / 15 dB 95.87% / 20 dB 95.91%
+- Fig.7 α_c=0.4：rate=31.92，随 α_c 上升（0.1→1.0：28.39→32.25）
+- Fig.9 P=0：31.92，随 P 单调上升
+
+状态：
+
+✅ 已接入统一数据/评价/绘图流程；Fig.6~9 图例与曲线已补齐
+
+`⚠️`：Table I 0 dB 相对论文约 −6.6pp（与 GPT2/CNN 同源：训练未做 CSI 噪声增强）；Fig.8 仅单点，无多 Rmin 曲线
 
 ---
 
@@ -221,19 +261,15 @@ GPT2/CNN：需要不同 Rmin 训练的模型才能产生下降曲线。
 
 ---
 
-## 当前优先级（2026-09-28 收束）
+## 当前优先级（2026-10-28 更新）
 
-已决定**不再**为贴论文曲线继续：
-
-- Fig.8 多 Rmin 硬拉下降形态
-- Table III γ2 全扫描
-- 为拉开 GPT2/CNN 间隙而改算法定义
+已完成 Transformer baseline 并接入 Fig.6~9 / Table I。
 
 若后续继续，仅剩真正有价值的方向：
 
-1. Transformer baseline（目标清单仍缺）
-2. 按论文 500 epoch 重训 Proposed（可选，对齐 Fig.5）
-3. 写复现报告：如实标注 WARN/BAD 与已知差异
+1. 按论文 500 epoch 重训 Proposed（可选，对齐 Fig.5）
+2. 写复现报告：如实标注 WARN/BAD 与已知差异
+3. （可选）Transformer/CNN 多 Rmin 重训补 Fig.8 形态——与此前“不硬拉”决定冲突，默认不做
 
 ---
 
@@ -330,7 +366,8 @@ python plot_results.py
    - 实际 α_N 已在 JSON 中记录，α_c=0.4 时 α_N≈0.34
 
 6. **Transformer**
-   - 论文 Fig.6~9 有 Transformer 曲线，当前未实现，图例缺失属预期
+   - 2026-10-28 已实现并出图；Fig.6~9 图例与曲线已补齐
+   - Fig.8 仅 rmin=0.6 单点（与不硬拉形态决定一致）
 
 ### 图形绘制本身
 
@@ -412,7 +449,7 @@ python plot_results.py
 3. **GPT2−CNN rate 间隙**：≈0.06 vs 论文 ≈0.51 → 结构性，已诊断  
 4. **传统 baseline**：NOMA/SDMA 相对论文低 8–20% → 已知实现差异，**不改算法硬拟合**  
 5. **Fig.4/5**：Fig.4 理论形态 OK；Fig.5 100 epoch + 验证代理损失，与论文 500 epoch 不完全同口径  
-6. **Table III / Transformer**：尚未完成  
+6. **Table III**：已放弃；**Transformer** 已完成（2026-10-28）
 
 ### 协议修复记录（2026-09-20）
 
