@@ -1,0 +1,24 @@
+{
+  "synthetic_B1": {
+    "rate_A": 6.320591647324548,
+    "rate_P": 4.7374000754346275,
+    "note": "见 stdout 手工核验"
+  },
+  "real_samples": [
+    1,
+    2
+  ],
+  "aggregate_100": {
+    "eq_power": {
+      "A": 24.671848183350924,
+      "P": 24.98078293904772
+    },
+    "author_power": {
+      "A": 25.13098074338113,
+      "P": 25.283265168994777
+    },
+    "interbeam_max": 0.04345479813909716
+  },
+  "crosscheck_max_abs_diff": 8.846980357191114e-07,
+  "verdict": "objective_mismatch: interference set complementary (A: stronger users, P: weaker users)"
+}
