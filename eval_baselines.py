@@ -23,7 +23,9 @@ base_output = r"C:\Users\17859\Desktop\files\Grad_Project\LLM for LAE\Codes_v1\o
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--quick', action='store_true', help='Skip Rmin/alpha sweeps')
-parser.add_argument('--matlab', action='store_true', help='Use MATLAB NOMA (author fmincon+WMMSE)')
+parser.add_argument('--matlab', action='store_true', help='(deprecated) NOMA 默认已是作者官方链；本开关无额外作用')
+parser.add_argument('--noma-python', action='store_true',
+                    help='NF-NOMA 用旧 Python 端口 noma_rate（对照用）；默认用作者官方链 NF_group_1→NF_NOMA')
 args = parser.parse_args()
 
 
@@ -531,6 +533,55 @@ def eval_baseline_with_penalty(loader, rate_fn, K_eval=None, sigma2=None, P_tota
     return np.mean(rates)
 
 
+# ===================== NF-NOMA 官方调用链（作者 [34] 实现）=====================#
+
+NOMA_OFFICIAL_CACHE = {}
+
+
+def eval_noma_official(test_loader, K_eval=None, sigma2=None, P_total=1.0):
+    """NF-NOMA = 作者官方调用链 NF_group_1→NF_NOMA(Hr,F,setf,K,rf,σ²,P,Imax=30)
+    （codes-NFNOMA/main_near_field_NOMA.m:168-190 同款），报告口径 SE(end)（main:207）。
+    经 MATLAB 并行执行；与 eval_baseline 相同返回值（样本均值 float）。
+    按 (K_eval, sigma2, P_total) 缓存，供 K/P 扫描与 Fig.7/8 常数线复用。"""
+    if sigma2 is None:
+        sigma2 = 10 ** (-20 / 10)
+    if K_eval is None:
+        K_eval = K
+    key = (int(K_eval), round(float(sigma2), 12), round(float(P_total), 12))
+    if key in NOMA_OFFICIAL_CACHE:
+        return NOMA_OFFICIAL_CACHE[key]
+
+    import subprocess
+    import scipy.io as sio
+    import time as _time
+
+    H_list = []
+    with torch.no_grad():
+        for data in test_loader:
+            H_list.append(_extract_H(data, K_eval))
+    H_all = torch.cat(H_list, dim=0).cpu().numpy().astype(np.complex128)   # [B,K,N] complex
+
+    mat_in = os.path.join(base_output, '_noma_official_input.mat')
+    mat_out = os.path.join(base_output, '_noma_official_output.mat')
+    sio.savemat(mat_in, {'H_batch': H_all, 'sigma2': float(sigma2), 'P_total': float(P_total)})
+
+    drv_dir = os.path.join(base_output, '_author_matlab')
+    cmd = f"addpath('{drv_dir}'); run_noma_official_batch('{mat_in}','{mat_out}')"
+    matlab = r'C:\Program Files\MATLAB\R2024a\bin\matlab.exe'
+    t0 = _time.time()
+    proc = subprocess.run([matlab, '-batch', cmd], capture_output=True, text=True, timeout=7200)
+    if proc.returncode != 0:
+        raise RuntimeError(f'官方 NF-NOMA (MATLAB) 失败: {proc.stderr[-800:]}')
+    out = sio.loadmat(mat_out)
+    SE_end = out['SE_end'].flatten().astype(float)
+    n_fail = int(out['fail'].flatten()[0]) if 'fail' in out else 0
+    r = float(np.nanmean(SE_end))
+    print(f'    [official NF-NOMA] K={K_eval} P={P_total:.4f}W sigma2={float(sigma2):.4f} '
+          f'-> {r:.4f}  ({len(SE_end)} samples, fail={n_fail}, {_time.time()-t0:.0f}s)')
+    NOMA_OFFICIAL_CACHE[key] = r
+    return r
+
+
 # ===================== Main =====================#
 
 def main():
@@ -543,7 +594,7 @@ def main():
         test_loader = load_test_set(use_raw=False)
         print(f"Test set: {len(test_loader.dataset)} samples (normalized channels)")
 
-    noma_fn = noma_rate_matlab if args.matlab else noma_rate
+    noma_fn = noma_rate  # 仅 --noma-python 时经批循环使用；默认走官方链（见 evl）
     baselines = {
         'Capacity': dpc_rate,
         'NF-NOMA': noma_fn,
@@ -551,13 +602,23 @@ def main():
         'SDMA': sdma_rate,
     }
 
+    def evl(name, fn, K_eval=None, sigma2=None, P_total=1.0, rmin=None):
+        # NF-NOMA 默认 = 作者官方调用链（MATLAB）；--noma-python 时回落旧端口
+        if name == 'NF-NOMA' and not args.noma_python:
+            return eval_noma_official(test_loader, K_eval=K_eval, sigma2=sigma2, P_total=P_total)
+        if rmin is None:
+            return eval_baseline(test_loader, fn, K_eval=K_eval, sigma2=sigma2, P_total=P_total)
+        return eval_baseline_with_penalty(test_loader, fn, K_eval=K_eval, sigma2=sigma2,
+                                          P_total=P_total, rmin=rmin)
+    print(f"NOMA implementation: {'python port (--noma-python)' if args.noma_python else 'official NF_group_1->NF_NOMA chain (Imax=30)'}")
+
     # ===== K sweep (Fig.6) =====
     print("\n===== K Sweep (5-10) =====")
     k_results = {}
     for k in range(5, 11):
         k_results[str(k)] = {}
         for name, fn in baselines.items():
-            r = eval_baseline(test_loader, fn, K_eval=k)
+            r = evl(name, fn, K_eval=k)
             k_results[str(k)][name] = r
             print(f"  K={k} {name}: {r:.4f}")
     results['k_sweep'] = k_results
@@ -571,7 +632,7 @@ def main():
         P_total = 10 ** (P_dBW / 10)  # Convert dBW to Watts
         fig9[str(P_dBW)] = {}
         for name, fn in baselines.items():
-            r = eval_baseline(test_loader, fn, sigma2=sigma2_fixed, P_total=P_total)
+            r = evl(name, fn, sigma2=sigma2_fixed, P_total=P_total)
             fig9[str(P_dBW)][name] = r
             print(f"  P={P_dBW:>3}dBW ({P_total:.4f}W) {name}: {r:.4f}")
     results['fig9'] = fig9
@@ -582,7 +643,7 @@ def main():
         fig7 = {}
         base_rates = {}
         for name, fn in baselines.items():
-            base_rates[name] = eval_baseline(test_loader, fn)
+            base_rates[name] = evl(name, fn)
         for alpha in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
             fig7[str(alpha)] = dict(base_rates)
         print(f"  Constant rates: " + " ".join(f"{n}={v:.4f}" for n, v in base_rates.items()))
@@ -594,7 +655,7 @@ def main():
         for rmin in [0, 0.2, 0.4, 0.6, 0.8, 1.0]:
             fig8[str(rmin)] = {}
             for name, fn in baselines.items():
-                r = eval_baseline_with_penalty(test_loader, fn, rmin=rmin)
+                r = evl(name, fn, rmin=rmin)
                 fig8[str(rmin)][name] = r
                 print(f"  Rmin={rmin:.1f} {name}: {r:.4f}")
         results['fig8'] = fig8
