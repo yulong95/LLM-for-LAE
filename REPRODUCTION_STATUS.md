@@ -476,7 +476,7 @@ python plot_results.py
 1. **Table I @0dB**：协议修复并统一 AWGN 后，GPT2 acc@0dB≈84.7%（论文 94.8%），CNN≈57.6%（论文 80.3%）→ 仍 BAD。主因：训练未用 CSI 噪声增强，非评估选错模型  
 2. **Fig.8 形态**：GPT2/CNN 随 Rmin 几乎水平（Δ≈0.01），论文下降约 0.3–0.7 → 需多 Rmin 重训  
 3. **GPT2−CNN rate 间隙**：≈0.06 vs 论文 ≈0.51 → 结构性，已诊断  
-4. **传统 baseline**：NOMA/SDMA 相对论文低 8–20% → 已知实现差异，**不改算法硬拟合**  
+4. **传统 baseline**：LDMA/SDMA 相对论文低 6–11%；NF-NOMA 已换作者官方调用链后仍低 4–7% → 已知实现差异，**不改算法硬拟合**（2026-10-30 接入，详见「NF-NOMA 接入官方实现」节）  
 5. **Fig.4/5**：Fig.4 理论形态 OK；Fig.5 100 epoch + 验证代理损失，与论文 500 epoch 不完全同口径  
 6. **Table III**：已放弃；**Transformer** 已完成（2026-10-28）
 
@@ -501,6 +501,14 @@ python plot_results.py
 - CNN 多 Rmin **未训完**（本轮暂停）
 - **未**改 Rmin/loss 定义硬拉曲线
 - `⚠️` Fig.8 形态仍未对上论文
+
+---
+
+## NF-NOMA 接入官方实现（2026-10-30）
+
+- `eval_baselines.py` 的 NF-NOMA 分支已改用**作者官方调用链** `NF_group_1→NF_NOMA`（`refs/code/codes-NFNOMA/`，[34] GLOBECOM'24；Imax=30，报告口径 SE(end)，与 `main_near_field_NOMA.m:168-190` 同款）；旧 Python 端口保留为 `--noma-python` 对照。官方仿真代码包已入库 `refs/code/`（codes-NFNOMA + SDMA_or_LDMA=[14] JSAC'23）。
+- 全量重评：K=5~10 与 P=−10~10dBW 共 17 点 × 1000 测试样本，fail=0；Capacity/LDMA/SDMA 逐位不变；Fig.7/8 的 NF-NOMA 为 24.9030 水平线；`figures/` 已刷新。
+- **已知差距（如实记录，不硬拉）**：NF-NOMA 对论文仍低 4–7%（K 轴 −0.65~−1.78，P 轴 −0.54~−3.18）；官方链比旧 Python 端口高 +0.4~+1.1（SIC 方向/功率优化差异已定位）。剩余缺口根源未明（候选：论文 baseline 的信道/配置适配细节，未确认），标注为已知实现差异。
 
 ---
 
